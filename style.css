@@ -1,0 +1,130 @@
+/* Bulk Manager — uses SillyTavern theme variables so it follows any theme */
+
+.bm_settings .bm_note { display: block; opacity: 0.7; margin-top: 6px; }
+.bm_settings .bm_btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.bm_settings .menu_button { width: auto; }
+.bm_version { opacity: 0.6; font-weight: normal; }
+
+/* Sized to the visible viewport from JS; the values below are the fallback. */
+#bm_modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100dvh;
+    z-index: 10050;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    box-sizing: border-box;
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+             max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    overflow: hidden;
+}
+#bm_modal.bm_busy { cursor: progress; }
+#bm_modal.bm_busy .bm_body, #bm_modal.bm_busy .bm_head, #bm_modal.bm_busy .bm_tabs, #bm_modal.bm_busy .bm_tools {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+#bm_modal .bm_dialog {
+    margin: auto;
+    box-sizing: border-box;
+    width: min(760px, 100%);
+    max-height: min(920px, 100%);
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--SmartThemeBlurTintColor, #222);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+    color: var(--SmartThemeBodyColor, #ddd);
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+#bm_modal .bm_head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; flex-shrink: 0; }
+#bm_modal .bm_title { flex: 1; white-space: nowrap; }
+#bm_modal .bm_close { width: auto; margin: 0; flex-shrink: 0; }
+
+#bm_modal .bm_tabs { display: flex; gap: 4px; padding: 0 12px 6px; flex-shrink: 0; }
+#bm_modal .bm_tab { width: auto; margin: 0; padding: 4px 12px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 0.9em; }
+#bm_modal .bm_tab.bm_active {
+    border-color: var(--SmartThemeQuoteColor, #e18a24);
+    color: var(--SmartThemeQuoteColor, #e18a24);
+    font-weight: 600;
+}
+
+#bm_modal .bm_tools {
+    display: flex;
+    gap: 6px;
+    padding: 0 12px 8px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #555);
+}
+#bm_modal #bm_search { flex: 1; min-width: 0; margin: 0; }
+#bm_modal #bm_sort { width: auto; margin: 0; flex-shrink: 0; }
+
+#bm_modal .bm_body { overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 10px; flex: 1 1 auto; min-height: 0; }
+#bm_modal .bm_empty { padding: 28px; text-align: center; opacity: 0.7; }
+#bm_modal .bm_dim { opacity: 0.65; font-weight: 400; }
+#bm_modal .bm_warn { color: #e0a030; }
+#bm_modal .bm_link { text-decoration: underline; cursor: pointer; color: var(--SmartThemeQuoteColor, #e18a24); white-space: nowrap; }
+#bm_modal .bm_listhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 4px 2px; font-size: 0.9em; }
+#bm_modal .bm_listhead .checkbox_label { margin: 0; }
+#bm_modal .bm_hint { font-size: 0.85em; }
+@media (hover: none) { #bm_modal .bm_hint { display: none; } }
+
+#bm_modal .bm_row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 7px 4px;
+    border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #555) 45%, transparent);
+    cursor: pointer;
+    user-select: none;
+    border-radius: 6px;
+}
+#bm_modal .bm_row.bm_sel { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 14%, transparent); }
+#bm_modal .bm_row input[type="checkbox"] { flex-shrink: 0; margin: 0; }
+#bm_modal .bm_avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: color-mix(in srgb, var(--SmartThemeBorderColor, #555) 40%, transparent); }
+#bm_modal .bm_main { flex: 1; min-width: 0; }
+#bm_modal .bm_name { font-weight: 600; overflow-wrap: anywhere; }
+#bm_modal .bm_sub { font-size: 0.75em; opacity: 0.6; overflow-wrap: anywhere; }
+#bm_modal .bm_badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+#bm_modal .bm_badge {
+    font-size: 0.75em;
+    padding: 1px 7px;
+    border-radius: 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    white-space: nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+#bm_modal .bm_b_current { border-color: #4ea8de; color: #4ea8de; }
+
+#bm_modal .bm_foot {
+    flex-shrink: 0;
+    padding: 8px 12px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #555);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+#bm_modal .bm_selinfo { font-size: 0.9em; }
+#bm_modal .bm_btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; margin-top: 4px; }
+#bm_modal .bm_btns .menu_button { width: auto; margin: 0; padding: 5px 12px; white-space: nowrap; }
+#bm_modal .bm_btns .menu_button i { margin-right: 5px; }
+#bm_modal .menu_button.disabled { opacity: 0.4; pointer-events: none; }
+#bm_modal .bm_confirm { width: 100%; font-size: 0.9em; display: flex; flex-direction: column; gap: 4px; }
+#bm_modal .bm_confirm .checkbox_label { margin: 2px 0; }
+#bm_modal .bm_confirm_list { max-height: 6.5em; overflow-y: auto; opacity: 0.85; overflow-wrap: anywhere; }
+#bm_modal .bm_field { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+#bm_modal .bm_field .text_pole { margin: 0; }
+#bm_modal .bm_progress { font-size: 0.9em; padding: 4px 0; }
+
+#bm_personas_btn span { margin-left: 4px; }

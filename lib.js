@@ -1,0 +1,129 @@
+/*
+ * Bulk Manager — pure helpers (no SillyTavern imports, so they run under node --test).
+ */
+
+export function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+export function fileStamp(ts = Date.now()) {
+    const d = new Date(ts);
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}@${p(d.getHours())}h${p(d.getMinutes())}m`;
+}
+
+export function safeFileName(s, fallback = 'file') {
+    return String(s ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '_').trim() || fallback;
+}
+
+/** Returns a function that hands out names unique within one zip folder (case-insensitive). */
+export function uniqueNamer() {
+    const used = new Set();
+    return (name) => {
+        const dot = name.lastIndexOf('.');
+        const base = dot > 0 ? name.slice(0, dot) : name;
+        const ext = dot > 0 ? name.slice(dot) : '';
+        let out = name;
+        for (let i = 2; used.has(out.toLowerCase()); i++) out = `${base} (${i})${ext}`;
+        used.add(out.toLowerCase());
+        return out;
+    };
+}
+
+export const avatarStem = avatar => String(avatar ?? '').replace(/\.[^/.]+$/, '');
+
+/**
+ * Avatar id for a duplicated persona. Same shape as SillyTavern's own duplicate
+ * (`<ms>-<ascii name>.png`), but never repeats an id that is already taken —
+ * a bulk copy runs many times inside the same millisecond.
+ */
+export function newPersonaId(name, taken, now = Date.now()) {
+    const slug = String(name ?? '').replace(/[^a-zA-Z0-9]/g, '');
+    let ts = now;
+    let id;
+    do {
+        id = `${ts}-${slug}.png`;
+        ts++;
+    } while (taken.has(id));
+    return id;
+}
+
+/** Copy of a persona descriptor for a duplicate. Character connections stay with the original (as in SillyTavern). */
+export function cloneDescriptor(d) {
+    const copy = d && typeof d === 'object' ? structuredClone(d) : {};
+    delete copy.connections;
+    return copy;
+}
+
+export function matchesQuery(query, ...fields) {
+    const q = String(query ?? '').trim().toLowerCase();
+    if (!q) return true;
+    return fields.some(f => String(f ?? '').toLowerCase().includes(q));
+}
+
+// ---------------------------------------------------------------- tiny ZIP writer (store, no compression)
+
+const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        t[n] = c >>> 0;
+    }
+    return t;
+})();
+
+export function crc32(buf) {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+/** @param {{name: string, data: Uint8Array}[]} files */
+export function makeZip(files, now = new Date()) {
+    const enc = new TextEncoder();
+    const time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+    const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    const parts = [];
+    const central = [];
+    let offset = 0;
+    for (const f of files) {
+        const name = enc.encode(f.name);
+        const crc = crc32(f.data);
+        const lh = new DataView(new ArrayBuffer(30));
+        lh.setUint32(0, 0x04034b50, true);
+        lh.setUint16(4, 20, true);
+        lh.setUint16(6, 0x0800, true); // UTF-8 file names
+        lh.setUint16(8, 0, true);
+        lh.setUint16(10, time, true);
+        lh.setUint16(12, date, true);
+        lh.setUint32(14, crc, true);
+        lh.setUint32(18, f.data.length, true);
+        lh.setUint32(22, f.data.length, true);
+        lh.setUint16(26, name.length, true);
+        parts.push(new Uint8Array(lh.buffer), name, f.data);
+
+        const ch = new DataView(new ArrayBuffer(46));
+        ch.setUint32(0, 0x02014b50, true);
+        ch.setUint16(4, 20, true);
+        ch.setUint16(6, 20, true);
+        ch.setUint16(8, 0x0800, true);
+        ch.setUint16(12, time, true);
+        ch.setUint16(14, date, true);
+        ch.setUint32(16, crc, true);
+        ch.setUint32(20, f.data.length, true);
+        ch.setUint32(24, f.data.length, true);
+        ch.setUint16(28, name.length, true);
+        ch.setUint32(42, offset, true);
+        central.push(new Uint8Array(ch.buffer), name);
+        offset += 30 + name.length + f.data.length;
+    }
+    const cdSize = central.reduce((a, b) => a + b.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, cdSize, true);
+    end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+}
