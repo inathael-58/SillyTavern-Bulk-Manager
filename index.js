@@ -1,8 +1,9 @@
 /*
  * Bulk Manager — SillyTavern UI extension
  *
- * Select many characters or personas at once, then delete, duplicate or back
- * them up in one go. Deleting always offers a .zip backup first.
+ * Select many characters, personas or lorebooks at once, then delete,
+ * duplicate or back them up in one go. Deleting always offers a .zip backup first.
+ * The Lorebook tab (formerly the Lore Tidy extension) lives in lorebooks.js.
  */
 
 import { deleteCharacter, getCharacters } from '../../../../script.js';
@@ -12,10 +13,11 @@ import {
     escapeHtml, fileStamp, safeFileName, uniqueNamer, avatarStem,
     newPersonaId, cloneDescriptor, matchesQuery, makeZip,
 } from './lib.js';
+import * as lore from './lorebooks.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '1.0.0'; // keep in sync with manifest.json
+const VERSION = '2.0.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 const ctx = () => SillyTavern.getContext();
@@ -60,11 +62,16 @@ const thumbUrl = (type, file) => `/thumbnail?type=${type}&file=${encodeURICompon
 
 // ---------------------------------------------------------------- state
 
+const TABS = ['chars', 'personas', 'books'];
+
 const ui = {
+    /** @type {'chars' | 'personas' | 'books'} */
     tab: 'chars',
+    /** Lorebook tab view: unused | bychar | all | tools */
+    bookView: 'unused',
     query: '',
     sort: 'name',
-    selected: { chars: new Set(), personas: new Set() },
+    selected: { chars: new Set(), personas: new Set(), books: new Set() },
     /** @type {null | 'delete' | 'copy'} */
     confirm: null,
     busy: false,
@@ -74,7 +81,7 @@ const ui = {
 };
 
 const sel = () => ui.selected[ui.tab];
-const unit = () => (ui.tab === 'chars' ? 'ตัว' : 'persona');
+const unit = () => ({ chars: 'ตัว', personas: 'persona', books: 'เล่ม' }[ui.tab]);
 
 // ---------------------------------------------------------------- rows
 
@@ -125,10 +132,10 @@ function personaRows() {
     }).sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.key, b.key));
 }
 
-const allRows = () => (ui.tab === 'chars' ? charRows() : personaRows());
+const allRows = () => (ui.tab === 'chars' ? charRows() : ui.tab === 'personas' ? personaRows() : []);
 const visibleRows = () => allRows().filter(r => matchesQuery(ui.query, r.name, r.sub));
 
-/** Drop selections whose item no longer exists (deleted elsewhere, etc.). */
+/** Drop selections whose item no longer exists (deleted elsewhere, etc.). Lorebooks: see lore.refreshModel. */
 function pruneSelection() {
     for (const tab of ['chars', 'personas']) {
         const keys = new Set((tab === 'chars' ? charRows() : personaRows()).map(r => r.key));
@@ -149,8 +156,9 @@ function badgesHtml(r) {
 
 // ---------------------------------------------------------------- modal
 
-function openModal(tab) {
-    if (tab === 'chars' || tab === 'personas') ui.tab = tab;
+function openModal(tab, bookView) {
+    if (TABS.includes(tab)) ui.tab = tab;
+    if (bookView) ui.bookView = bookView;
     const old = document.getElementById('bm_modal');
     if (old) old._bmClose?.();
 
@@ -164,12 +172,14 @@ function openModal(tab) {
             </div>
             <div class="bm_tabs" role="tablist"></div>
             <div class="bm_tools">
-                <input id="bm_search" class="text_pole" type="search" placeholder="ค้นหาชื่อ / ไฟล์">
+                <input id="bm_search" class="text_pole" type="search">
                 <select id="bm_sort" class="text_pole" title="เรียงตาม">
                     <option value="name">ชื่อ A→Z</option>
                     <option value="added">เพิ่มล่าสุด</option>
                 </select>
             </div>
+            <div class="bm_subtabs" role="tablist"></div>
+            <div class="bm_status"></div>
             <div class="bm_body"></div>
             <div class="bm_foot"></div>
         </div>`;
@@ -208,11 +218,15 @@ function openModal(tab) {
 
     ui.confirm = null;
     renderAll();
+    if (ui.tab === 'books') lore.onShow();
 }
+
+const closeModal = () => document.getElementById('bm_modal')?._bmClose?.();
 
 function renderAll() {
     if (!document.getElementById('bm_modal')) return;
     pruneSelection();
+    lore.refreshModel();
     renderTabs();
     renderBody();
     renderFoot();
@@ -231,6 +245,7 @@ function renderTabs() {
     const tabs = [
         ['chars', 'fa-user', 'บอท', (ctx().characters ?? []).length],
         ['personas', 'fa-masks-theater', 'Persona', Object.keys(power_user.personas ?? {}).length],
+        ['books', 'fa-book-atlas', 'Lorebook', lore.bookNames().length],
     ];
     el.innerHTML = tabs.map(([id, icon, label, n]) => {
         const s = ui.selected[id].size;
@@ -243,14 +258,30 @@ function renderTabs() {
         ui.confirm = null;
         ui.lastClicked = null;
         renderAll();
+        if (ui.tab === 'books') lore.onShow();
     }));
     const sort = document.getElementById('bm_sort');
     if (sort) sort.style.display = ui.tab === 'chars' ? '' : 'none';
+    const search = document.getElementById('bm_search');
+    if (search) search.placeholder = ui.tab === 'books' ? 'ค้นหาชื่อเล่ม / การ์ด' : 'ค้นหาชื่อ / ไฟล์';
+    const sub = document.querySelector('#bm_modal .bm_subtabs');
+    const status = document.querySelector('#bm_modal .bm_status');
+    if (ui.tab === 'books') {
+        lore.renderSubtabs(sub);
+        lore.renderStatus(status);
+    } else {
+        sub.innerHTML = '';
+        status.innerHTML = '';
+    }
 }
 
 function renderBody() {
     const body = document.querySelector('#bm_modal .bm_body');
     if (!body) return;
+    if (ui.tab === 'books') {
+        lore.renderBody(body);
+        return;
+    }
     const rows = visibleRows();
     const s = sel();
     let html;
@@ -280,23 +311,29 @@ function renderBody() {
     body.scrollTop = scroll;
 
     const keys = rows.map(r => r.key);
-    body.querySelectorAll('.bm_row').forEach((row, i) => {
-        const key = keys[i];
-        const onPick = (e, on) => {
-            if (e.shiftKey && ui.lastClicked !== null && keys.includes(ui.lastClicked)) {
-                const a = keys.indexOf(ui.lastClicked);
-                const [lo, hi] = a < i ? [a, i] : [i, a];
-                toggleSel(keys.slice(lo, hi + 1), on);
-            } else {
-                toggleSel([key], on);
-            }
-            ui.lastClicked = key;
-        };
-        const cb = row.querySelector('.bm_cb');
-        cb.addEventListener('click', e => { e.stopPropagation(); onPick(e, cb.checked); });
-        row.addEventListener('click', e => onPick(e, !sel().has(key)));
-    });
+    body.querySelectorAll('.bm_row').forEach((row, i) => wireRow(row, keys[i], keys));
     body.querySelector('.bm_allcb')?.addEventListener('change', e => toggleSel(keys, e.target.checked));
+}
+
+/**
+ * Tap the row or its checkbox to toggle; Shift-click selects a range.
+ * `keys` is the list in display order (null where ranges make no sense, e.g. grouped lists).
+ */
+function wireRow(row, key, keys) {
+    const onPick = (e, on) => {
+        if (e.shiftKey && keys && ui.lastClicked !== null && keys.includes(ui.lastClicked)) {
+            const a = keys.indexOf(ui.lastClicked);
+            const i = keys.indexOf(key);
+            const [lo, hi] = a < i ? [a, i] : [i, a];
+            toggleSel(keys.slice(lo, hi + 1), on);
+        } else {
+            toggleSel([key], on);
+        }
+        ui.lastClicked = key;
+    };
+    const cb = row.querySelector('.bm_cb');
+    cb.addEventListener('click', e => { e.stopPropagation(); onPick(e, cb.checked); });
+    row.addEventListener('click', e => onPick(e, !sel().has(key)));
 }
 
 function toggleSel(keys, on) {
@@ -323,6 +360,10 @@ function renderFoot() {
         foot.innerHTML = `<div class="bm_progress"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(ui.progress)}</div>`;
         return;
     }
+    if (ui.tab === 'books') {
+        lore.renderFoot(foot);
+        return;
+    }
 
     const nameList = picked.map(r => escapeHtml(r.name || r.key)).join(' · ');
 
@@ -335,6 +376,8 @@ function renderFoot() {
             warns.push('แชทที่เปิดอยู่ตอนนี้จะถูกปิดก่อนลบ (แบบเดียวกับตอนลบใน SillyTavern เอง)');
             const grouped = targets.filter(r => r.inGroups.length);
             if (grouped.length) warns.push(`${grouped.length} ตัวอยู่ในแชทกลุ่ม: ${grouped.map(r => escapeHtml(r.name)).join(', ')}`);
+            const books = lore.booksOfCharacters(targets.map(r => r.key));
+            if (books.length) warns.push(`lorebook ของบอทเหล่านี้ไม่ถูกลบไปด้วย (${books.map(escapeHtml).join(', ')}) ลบบอทเสร็จแล้วไปเก็บกวาดได้ที่แท็บ Lorebook › ไม่มีใครใช้`);
         } else {
             if (kept.length) warns.push(`ข้าม <b>${escapeHtml(kept[0].name)}</b> เพราะเป็น persona ที่ใช้อยู่ สลับไปใช้ตัวอื่นก่อนถ้าจะลบ`);
             const def = targets.find(r => r.isDefault);
@@ -693,13 +736,52 @@ function renderSettings() {
                 <div class="bm_btns">
                     <div class="menu_button menu_button_icon" id="bm_settings_chars"><i class="fa-solid fa-user"></i> จัดการบอท</div>
                     <div class="menu_button menu_button_icon" id="bm_settings_personas"><i class="fa-solid fa-masks-theater"></i> จัดการ persona</div>
+                    <div class="menu_button menu_button_icon" id="bm_settings_books"><i class="fa-solid fa-broom"></i> จัดการ lorebook</div>
                 </div>
-                <small class="bm_note">หรือกดปุ่ม <i class="fa-solid fa-layer-group"></i> ข้างปุ่ม Bulk edit ในรายชื่อบอท / ข้างปุ่ม Restore ในหน้า Persona หรือพิมพ์ <code>/bulk</code> (<code>/bulk personas</code>)</small>
+                <small class="bm_note">หรือกดปุ่ม <i class="fa-solid fa-layer-group"></i> ข้างปุ่ม Bulk edit ในรายชื่อบอท / ข้างปุ่ม Restore ในหน้า Persona / ปุ่ม <i class="fa-solid fa-broom"></i> ในแผง World Info หรือพิมพ์ <code>/bulk</code> (<code>/bulk personas</code>, <code>/bulk lore</code>)</small>
+                <hr class="sysHR">
+                <b>แผง World Info</b>
+                <label class="checkbox_label" title="บนมือถือ ช่อง Global ขึ้นแค่ว่า &quot;2 Items&quot; ตัวเลือกนี้จะแสดงชื่อเล่มใต้ช่องให้เห็นเลย (บนคอมช่องนี้แสดงชื่ออยู่แล้ว จึงไม่แสดงซ้ำ)"><input type="checkbox" id="bm_show_global"> แสดงชื่อเล่ม Global ใต้ช่อง Active World(s) for all chats</label>
+                <label class="checkbox_label"><input type="checkbox" id="bm_show_chat"> แสดงส่วน Active World(s) for this chat</label>
+                <div id="bm_old_loretidy" class="bm_note bm_warn" style="display:none"><i class="fa-solid fa-triangle-exclamation"></i> ยังติดตั้งส่วนขยาย Lore Tidy ตัวเก่าอยู่ ตอนนี้ Lore Tidy รวมอยู่ใน Bulk Manager แล้ว ถอน Lore Tidy ออกได้เลย (ระหว่างนี้แผง World Info ใช้ของ Lore Tidy ไปก่อน จะได้ไม่ขึ้นซ้ำ)</div>
             </div>
         </div>
     </div>`);
     document.getElementById('bm_settings_chars').addEventListener('click', () => openModal('chars'));
     document.getElementById('bm_settings_personas').addEventListener('click', () => openModal('personas'));
+    document.getElementById('bm_settings_books').addEventListener('click', () => openModal('books'));
+    const s = settings();
+    for (const [id, key] of [['bm_show_global', 'showGlobalChips'], ['bm_show_chat', 'showChatPanel']]) {
+        const el = document.getElementById(id);
+        el.checked = !!s[key];
+        el.addEventListener('change', () => { s[key] = el.checked; ctx().saveSettingsDebounced(); lore.renderPanel(); });
+    }
+}
+
+const SETTING_DEFAULTS = Object.freeze({ showGlobalChips: true, showChatPanel: true });
+const OLD_LORE_TIDY_MODULE = 'lore_tidy';
+
+function settings() {
+    const ext = ctx().extensionSettings;
+    ext[MODULE] ??= {};
+    const s = ext[MODULE];
+    // Coming from Lore Tidy: keep its World Info panel choices.
+    const old = ext[OLD_LORE_TIDY_MODULE];
+    for (const [k, v] of Object.entries(SETTING_DEFAULTS)) {
+        if (s[k] === undefined) s[k] = typeof old?.[k] === 'boolean' ? old[k] : v;
+    }
+    return s;
+}
+
+/** The standalone Lore Tidy is now part of this extension: tell the user once per session if it is still installed. */
+let oldLoreTidyNoticeShown = false;
+function checkOldLoreTidy() {
+    if (!lore.oldLoreTidyLoaded()) return;
+    const note = document.getElementById('bm_old_loretidy');
+    if (note) note.style.display = '';
+    if (oldLoreTidyNoticeShown) return;
+    oldLoreTidyNoticeShown = true;
+    toast.warn('Lore Tidy รวมอยู่ใน Bulk Manager แล้ว (แท็บ Lorebook) ถอนส่วนขยาย Lore Tidy ตัวเก่าออกได้เลย');
 }
 
 function registerCommand() {
@@ -708,11 +790,20 @@ function registerCommand() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'bulk',
         callback: (_args, value) => {
-            openModal(/^p/i.test(String(value ?? '').trim()) ? 'personas' : 'chars');
+            const arg = String(value ?? '').trim();
+            openModal(/^p/i.test(arg) ? 'personas' : /^(l|b|w)/i.test(arg) ? 'books' : 'chars');
             return '';
         },
-        helpString: 'เปิด Bulk Manager — ลบ / คัดลอก / สำรองบอทหรือ persona ทีละหลายตัว ใส่ <code>personas</code> เพื่อเปิดแท็บ persona',
+        helpString: 'เปิด Bulk Manager — ลบ / คัดลอก / สำรองบอท persona หรือ lorebook ทีละหลายรายการ ใส่ <code>personas</code> หรือ <code>lore</code> เพื่อเปิดแท็บนั้น',
     }));
+    // Old Lore Tidy command; skipped while the old extension is still installed (it registers its own).
+    if (!lore.oldLoreTidyLoaded()) {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'loretidy',
+            callback: () => { openModal('books'); return ''; },
+            helpString: 'เปิดแท็บ Lorebook ของ Bulk Manager (เดิมคือ Lore Tidy) — ดูว่า lorebook แต่ละเล่มถูกใช้ที่ไหน และลบเล่มที่ไม่มีใครใช้',
+        }));
+    }
 }
 
 // ---------------------------------------------------------------- stale-code check
@@ -744,7 +835,7 @@ async function checkForNewVersion() {
 
 async function reloadWithFreshFiles() {
     try {
-        await Promise.all(['index.js', 'lib.js', 'style.css', 'manifest.json'].map(f =>
+        await Promise.all(['index.js', 'lib.js', 'lorebooks.js', 'style.css', 'manifest.json'].map(f =>
             fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
     } finally {
         location.reload();
@@ -754,21 +845,28 @@ async function reloadWithFreshFiles() {
 // ---------------------------------------------------------------- init
 
 function init() {
-    ctx().extensionSettings[MODULE] ??= {};
+    settings();
     injectButtons();
     renderSettings();
-    registerCommand();
+    lore.setupLorebooks({
+        ui, toast, busy, setProgress, report, downloadBlob, renderAll, renderSoon, renderBody, renderFoot,
+        toggleSel, wireRow, openModal, closeModal, settings,
+    });
     const { eventSource, event_types: E } = ctx();
     for (const ev of [E.APP_READY, E.CHARACTER_PAGE_LOADED].filter(Boolean)) eventSource.on(ev, injectButtons);
     for (const ev of [E.CHAT_CHANGED, E.CHARACTER_DELETED, E.CHARACTER_EDITED, E.CHARACTER_RENAMED, E.CHARACTER_PAGE_LOADED,
-        E.PERSONA_CHANGED, E.SETTINGS_UPDATED, E.GROUP_UPDATED].filter(Boolean)) {
+        E.PERSONA_CHANGED, E.SETTINGS_UPDATED, E.GROUP_UPDATED, E.WORLDINFO_SETTINGS_UPDATED, E.WORLDINFO_UPDATED].filter(Boolean)) {
         eventSource.on(ev, renderSoon);
     }
+    // Every extension module has been loaded by APP_READY, so the old Lore Tidy is visible by then.
+    if (E.APP_READY) eventSource.on(E.APP_READY, () => { registerCommand(); checkOldLoreTidy(); });
+    else registerCommand();
+    setTimeout(checkOldLoreTidy, 3000);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForNewVersion(); });
     setTimeout(checkForNewVersion, 3000);
     console.log(LOG, 'loaded', `v${VERSION}`);
 }
 
-globalThis.BulkManager = { VERSION, open: openModal, checkForNewVersion, reloadWithFreshFiles };
+globalThis.BulkManager = { VERSION, open: openModal, checkForNewVersion, reloadWithFreshFiles, lore: lore.loreDebug };
 
 if (typeof jQuery === 'function') jQuery(init); else init();

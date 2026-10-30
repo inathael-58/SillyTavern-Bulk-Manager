@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { uniqueNamer, newPersonaId, cloneDescriptor, matchesQuery, safeFileName, avatarStem, makeZip, crc32 } from '../lib.js';
+import {
+    uniqueNamer, newPersonaId, cloneDescriptor, matchesQuery, safeFileName, avatarStem, makeZip, crc32,
+    buildLoreModel, isUnused, wipLeftoversInGlobal,
+} from '../lib.js';
 
 test('uniqueNamer numbers clashes case-insensitively and keeps the extension', () => {
     const n = uniqueNamer();
@@ -53,4 +56,64 @@ test('makeZip writes a valid stored zip', async () => {
     assert.equal(dv.getUint16(end + 10, true), 2);
     assert.equal(dv.getUint32(14, true), crc32(enc.encode('hello')));
     assert.equal(crc32(enc.encode('123456789')), 0xCBF43926);
+});
+
+const alice = { name: 'Alice', avatar: 'Alice.png', data: { extensions: { world: 'Alice Lore' } } };
+const bob = { name: 'Bob', avatar: 'Bob.png', data: { extensions: {} } };
+
+function loreInput(over = {}) {
+    return {
+        names: ['Alice Lore', 'Extra', 'Global Book', 'Persona Book', 'Chat Book', 'Live Book', 'WIP Book', 'Orphan'],
+        globals: ['Global Book', 'Gone Global'],
+        characters: [alice, bob],
+        charLore: [{ name: 'Bob', extraBooks: ['Extra', 'Gone Extra'] }, { name: 'Deleted', extraBooks: ['Extra'] }],
+        personas: { 'p.png': 'Me' },
+        personaDescs: { 'p.png': { lorebook: 'Persona Book' }, 'q.png': {} },
+        chatLinks: [
+            { book: 'Chat Book', char: { name: 'Bob', avatar: 'Bob.png' }, file: 'Bob - 1' },
+            { book: 'Orphan', char: { name: 'Zed', avatar: 'Zed.png' }, file: 'Zed - 1' },
+            { book: 'Chat Book', char: { name: 'Alice', avatar: 'Alice.png' }, file: 'Alice - open' },
+        ],
+        fileToChar: new Map([['Bob - 2', { name: 'Bob', avatar: 'Bob.png' }]]),
+        currentChatId: 'Alice - open',
+        currentRef: { name: 'Alice', avatar: 'Alice.png' },
+        liveBook: 'Live Book',
+        wipChatLorebooks: { 'Bob - 2': ['WIP Book', 'Gone WIP'], bad: 'x' },
+        ...over,
+    };
+}
+
+test('buildLoreModel finds every kind of use', () => {
+    const m = buildLoreModel(loreInput());
+    const u = n => m.usage.get(n);
+    assert.equal(u('Alice Lore').chars[0].kind, 'primary');
+    assert.deepEqual(u('Extra').chars.map(x => [x.char.name, x.kind]), [['Bob', 'extra']]);
+    assert.ok(u('Global Book').global);
+    assert.deepEqual(u('Persona Book').personas, ['Me']);
+    assert.deepEqual(u('Chat Book').chats.map(x => x.file), ['Bob - 1']); // open chat comes from liveBook instead
+    assert.deepEqual(u('Live Book').chats, [{ char: { name: 'Alice', avatar: 'Alice.png' }, file: 'Alice - open' }]);
+    assert.equal(u('WIP Book').wip[0].char.name, 'Bob');
+    // links of characters deleted since the scan don't count
+    assert.ok(isUnused(u('Orphan')));
+    const unused = m.names.filter(n => isUnused(u(n)));
+    assert.deepEqual(unused, ['Orphan']);
+});
+
+test('buildLoreModel reports dangling links and stale extra-book entries', () => {
+    const m = buildLoreModel(loreInput());
+    assert.deepEqual(m.missing.map(x => x.book).sort(), ['Gone Extra', 'Gone Global']);
+    assert.deepEqual(m.missing.find(x => x.book === 'Gone Extra').fix, { type: 'extra', stem: 'Bob' });
+    assert.deepEqual(m.staleCharLore.map(e => e.name), ['Deleted']);
+});
+
+test('buildLoreModel copes with empty input', () => {
+    const m = buildLoreModel({});
+    assert.deepEqual(m.names, []);
+    assert.deepEqual(m.missing, []);
+});
+
+test('wipLeftoversInGlobal keeps only existing globals that WIP linked', () => {
+    const exists = new Set(['A', 'B', 'C']);
+    assert.deepEqual(wipLeftoversInGlobal(['A', 'B', 'X'], { c1: ['A', 'X'], c2: 'junk' }, exists), ['A']);
+    assert.deepEqual(wipLeftoversInGlobal(['A'], undefined, exists), []);
 });
