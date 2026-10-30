@@ -61,6 +61,146 @@ export function matchesQuery(query, ...fields) {
     return fields.some(f => String(f ?? '').toLowerCase().includes(q));
 }
 
+// ---------------------------------------------------------------- deleting characters: which chats go with them
+
+/** Key for one chat of one character in the "keep" set. `*` stands for every chat (used when the list couldn't be read). */
+export const chatKey = (avatar, file) => `${avatar}\n${file}`;
+
+/**
+ * Split a character delete into SillyTavern calls.
+ * @param {string[]} avatars characters to delete
+ * @param {Map<string, {state: string, chats: {file: string}[]}>} chatInfo chat lists that were read (state 'done')
+ * @param {Set<string>} keep chatKey()s the user wants to keep
+ * @returns {{full: string[], partial: string[], chatDeletes: {avatar: string, file: string}[], keptCount: number}}
+ *   full: delete with all their chats (deleteChats: true); partial: delete the character only,
+ *   then remove chatDeletes one by one.
+ */
+export function planCharDelete(avatars, chatInfo, keep) {
+    const full = [];
+    const partial = [];
+    const chatDeletes = [];
+    let keptCount = 0;
+    for (const avatar of avatars) {
+        const info = chatInfo.get(avatar);
+        if (info?.state !== 'done') {
+            if (keep.has(chatKey(avatar, '*'))) partial.push(avatar);
+            else full.push(avatar);
+            continue;
+        }
+        const drop = info.chats.filter(c => !keep.has(chatKey(avatar, c.file)));
+        keptCount += info.chats.length - drop.length;
+        if (drop.length === info.chats.length) {
+            full.push(avatar);
+        } else {
+            partial.push(avatar);
+            for (const c of drop) chatDeletes.push({ avatar, file: c.file });
+        }
+    }
+    return { full, partial, chatDeletes, keptCount };
+}
+
+// ---------------------------------------------------------------- lorebook usage model
+
+/**
+ * @typedef {{name: string, avatar: string}} CharRef
+ * @typedef {{
+ *   global: boolean,
+ *   chars: {char: CharRef, kind: 'primary'|'extra'}[],
+ *   personas: string[],
+ *   chats: {char: CharRef|null, file: string}[],
+ *   wip: {chatId: string, char: CharRef|null}[],
+ * }} Usage
+ */
+
+/**
+ * Where every lorebook is used. Takes plain data (read from SillyTavern by the caller):
+ * names, globals, characters [{name, avatar, data}], charLore [{name, extraBooks}],
+ * personas {id: name}, personaDescs {id: {lorebook}}, chatLinks [{book, char, file}] from the chat scan,
+ * fileToChar Map(chat id -> CharRef), currentChatId, currentRef, liveBook (chat lore of the open chat),
+ * wipChatLorebooks {chatId: string[]} (WorldInfoPlus leftovers).
+ */
+export function buildLoreModel(input) {
+    const names = [...(input.names ?? [])];
+    const exists = new Set(names);
+    /** @type {Map<string, Usage>} */
+    const usage = new Map(names.map(n => [n, { global: false, chars: [], personas: [], chats: [], wip: [] }]));
+    /** @type {{book: string, where: string, fix?: {type: 'extra', stem: string}}[]} */
+    const missing = [];
+    const touch = (book, where, fix) => {
+        if (usage.has(book)) return usage.get(book);
+        missing.push({ book, where, fix });
+        return null;
+    };
+
+    for (const n of input.globals ?? []) {
+        const u = touch(n, 'Global');
+        if (u) u.global = true;
+    }
+
+    const chars = (input.characters ?? []).filter(ch => ch?.avatar);
+    const stemToChar = new Map();
+    const avatars = new Set();
+    for (const ch of chars) {
+        const ref = { name: ch.name, avatar: ch.avatar };
+        avatars.add(ch.avatar);
+        stemToChar.set(avatarStem(ch.avatar), ref);
+        const primary = ch.data?.extensions?.world;
+        if (primary) touch(primary, `การ์ด ${ch.name} (เล่มหลัก)`)?.chars.push({ char: ref, kind: 'primary' });
+    }
+
+    /** charLore entries whose character no longer exists */
+    const staleCharLore = [];
+    for (const entry of input.charLore ?? []) {
+        const ref = stemToChar.get(entry?.name);
+        if (!ref) {
+            staleCharLore.push(entry);
+            continue;
+        }
+        for (const b of entry.extraBooks ?? []) {
+            touch(b, `การ์ด ${ref.name} (เล่มเสริม)`, { type: 'extra', stem: entry.name })?.chars.push({ char: ref, kind: 'extra' });
+        }
+    }
+
+    for (const [id, desc] of Object.entries(input.personaDescs ?? {})) {
+        const book = desc?.lorebook;
+        if (!book) continue;
+        const pname = input.personas?.[id] || id;
+        touch(book, `Persona ${pname}`)?.personas.push(pname);
+    }
+
+    // Chat lore: every character chat (from the scan) + the chat open right now (live, may be unsaved).
+    // Links of characters deleted since the scan are gone with them.
+    const currentId = input.currentChatId ? String(input.currentChatId) : null;
+    for (const l of input.chatLinks ?? []) {
+        if (l.file === currentId || !avatars.has(l.char?.avatar)) continue;
+        touch(l.book, `แชท ${l.char.name} — ${l.file}`)?.chats.push({ char: l.char, file: l.file });
+    }
+    const liveBook = input.liveBook;
+    if (currentId && typeof liveBook === 'string' && liveBook) {
+        touch(liveBook, `แชทที่เปิดอยู่ (${currentId})`)?.chats.push({ char: input.currentRef ?? null, file: currentId });
+    }
+
+    // WorldInfoPlus "multi chat lore" links (kept in settings even after WIP is removed).
+    for (const [chatId, books] of Object.entries(input.wipChatLorebooks ?? {})) {
+        if (!Array.isArray(books)) continue;
+        const char = input.fileToChar?.get(chatId) ?? (chatId === currentId ? input.currentRef ?? null : null);
+        for (const b of books) usage.get(b)?.wip.push({ chatId, char });
+    }
+
+    return { names, exists, usage, missing, staleCharLore };
+}
+
+export function isUnused(u) {
+    return !u.global && !u.chars.length && !u.personas.length && !u.chats.length && !u.wip.length;
+}
+
+/** Books sitting in Global only because WorldInfoPlus injected them for chat lore. */
+export function wipLeftoversInGlobal(globals, wipChatLorebooks, exists) {
+    if (!wipChatLorebooks) return [];
+    const wipBooks = new Set(Object.values(wipChatLorebooks).filter(Array.isArray).flat());
+    return (globals ?? []).filter(n => wipBooks.has(n) && exists.has(n));
+}
+
 // ---------------------------------------------------------------- tiny ZIP writer (store, no compression)
 
 const CRC_TABLE = (() => {

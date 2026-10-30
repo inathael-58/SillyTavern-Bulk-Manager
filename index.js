@@ -1,8 +1,9 @@
 /*
  * Bulk Manager — SillyTavern UI extension
  *
- * Select many characters or personas at once, then delete, duplicate or back
- * them up in one go. Deleting always offers a .zip backup first.
+ * Select many characters, personas or lorebooks at once, then delete,
+ * duplicate or back them up in one go. Deleting always offers a .zip backup first.
+ * The Lorebook tab (formerly the Lore Tidy extension) lives in lorebooks.js.
  */
 
 import { deleteCharacter, getCharacters } from '../../../../script.js';
@@ -10,12 +11,13 @@ import { power_user } from '../../../power-user.js';
 import { getUserAvatars, getUserAvatar, user_avatar } from '../../../personas.js';
 import {
     escapeHtml, fileStamp, safeFileName, uniqueNamer, avatarStem,
-    newPersonaId, cloneDescriptor, matchesQuery, makeZip,
+    newPersonaId, cloneDescriptor, matchesQuery, makeZip, planCharDelete, chatKey,
 } from './lib.js';
+import * as lore from './lorebooks.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '1.0.0'; // keep in sync with manifest.json
+const VERSION = '2.0.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 const ctx = () => SillyTavern.getContext();
@@ -60,21 +62,105 @@ const thumbUrl = (type, file) => `/thumbnail?type=${type}&file=${encodeURICompon
 
 // ---------------------------------------------------------------- state
 
+const TABS = ['chars', 'personas', 'books'];
+
 const ui = {
+    /** @type {'chars' | 'personas' | 'books'} */
     tab: 'chars',
+    /** Lorebook tab view: unused | bychar | all | tools */
+    bookView: 'unused',
     query: '',
     sort: 'name',
-    selected: { chars: new Set(), personas: new Set() },
+    selected: { chars: new Set(), personas: new Set(), books: new Set() },
     /** @type {null | 'delete' | 'copy'} */
     confirm: null,
     busy: false,
     progress: '',
     lastClicked: null,
     copySuffix: '',
+    delBackup: true,
+    /** @type {Map<string, {state: 'loading'|'done'|'error', chats: ChatInfo[]}>} chat lists per character avatar */
+    chatInfo: new Map(),
+    /** @type {Set<string>} chatKey()s to keep when their character is deleted (default: delete) */
+    keepChats: new Set(),
+    /** @type {Set<string>} characters whose chat list is open in the list */
+    expanded: new Set(),
 };
 
 const sel = () => ui.selected[ui.tab];
-const unit = () => (ui.tab === 'chars' ? 'ตัว' : 'persona');
+const unit = () => ({ chars: 'ตัว', personas: 'persona', books: 'เล่ม' }[ui.tab]);
+
+// ---------------------------------------------------------------- character chats
+
+/** @typedef {{file: string, id: string, items: number, size: string, last: number|string, mes: string}} ChatInfo */
+
+/** Read a character's chat list (file, message count, size, last message). Rerenders when done. */
+async function loadChats(avatar) {
+    const known = ui.chatInfo.get(avatar);
+    if (known?.state === 'loading') return;
+    ui.chatInfo.set(avatar, { state: 'loading', chats: [] });
+    let entry;
+    try {
+        const res = await postJson('/api/characters/chats', { avatar_url: avatar });
+        const list = res.ok ? await res.json() : null;
+        if (!res.ok) throw new Error(String(res.status));
+        // { error: true } = no chat folder yet, i.e. no chats
+        const chats = (Array.isArray(list) ? list : []).filter(c => c?.file_name).map(c => ({
+            file: String(c.file_name),
+            id: String(c.file_id ?? c.file_name).replace(/\.jsonl$/, ''),
+            items: Number(c.chat_items) || 0,
+            size: String(c.file_size ?? ''),
+            last: c.last_mes ?? 0,
+            mes: String(c.mes ?? ''),
+        })).sort((a, b) => toTime(b.last) - toTime(a.last));
+        entry = { state: 'done', chats };
+    } catch (e) {
+        console.warn(LOG, 'chat list failed for', avatar, e);
+        entry = { state: 'error', chats: [] };
+    }
+    // Dropped meanwhile (cache cleared): don't resurrect a stale result.
+    if (ui.chatInfo.get(avatar)?.state !== 'loading') return;
+    ui.chatInfo.set(avatar, entry);
+    if (!ui.busy && document.getElementById('bm_modal')) {
+        if (ui.tab === 'chars') renderBody();
+        renderFoot();
+    }
+}
+
+function toTime(v) {
+    if (typeof v === 'number') return v;
+    const t = Date.parse(String(v ?? ''));
+    return Number.isNaN(t) ? 0 : t;
+}
+
+function chatMeta(c) {
+    const t = toTime(c.last);
+    const when = t ? new Date(t).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+    return [`${c.items} ข้อความ`, c.size, when].filter(Boolean).join(' · ');
+}
+
+/** Chat list shown under a character row in the list. */
+function chatListHtml(avatar) {
+    const info = ui.chatInfo.get(avatar);
+    let inner;
+    if (!info || info.state === 'loading') inner = '<div class="bm_dim"><i class="fa-solid fa-spinner fa-spin"></i> กำลังอ่านรายชื่อแชท…</div>';
+    else if (info.state === 'error') inner = '<div class="bm_warn">อ่านรายชื่อแชทไม่ได้</div>';
+    else if (!info.chats.length) inner = '<div class="bm_dim">ยังไม่มีแชท</div>';
+    else {
+        inner = info.chats.map(c => `
+            <div class="bm_chat" title="${escapeHtml(c.mes)}">
+                <i class="fa-regular fa-comment"></i>
+                <div class="bm_chat_main"><div class="bm_chat_name">${escapeHtml(c.id)}</div><div class="bm_sub">${escapeHtml(chatMeta(c))}</div></div>
+            </div>`).join('');
+    }
+    return `<div class="bm_chatlist" data-avatar="${escapeHtml(avatar)}">${inner}</div>`;
+}
+
+/** Drop cached chat lists (chats were added, removed or renamed somewhere). */
+function forgetChats() {
+    ui.chatInfo.clear();
+    renderSoon();
+}
 
 // ---------------------------------------------------------------- rows
 
@@ -125,15 +211,22 @@ function personaRows() {
     }).sort((a, b) => collator.compare(a.name, b.name) || collator.compare(a.key, b.key));
 }
 
-const allRows = () => (ui.tab === 'chars' ? charRows() : personaRows());
+const allRows = () => (ui.tab === 'chars' ? charRows() : ui.tab === 'personas' ? personaRows() : []);
 const visibleRows = () => allRows().filter(r => matchesQuery(ui.query, r.name, r.sub));
 
-/** Drop selections whose item no longer exists (deleted elsewhere, etc.). */
+/** Drop selections whose item no longer exists (deleted elsewhere, etc.). Lorebooks: see lore.refreshModel. */
 function pruneSelection() {
     for (const tab of ['chars', 'personas']) {
         const keys = new Set((tab === 'chars' ? charRows() : personaRows()).map(r => r.key));
         for (const k of ui.selected[tab]) if (!keys.has(k)) ui.selected[tab].delete(k);
     }
+}
+
+function chatsButtonHtml(avatar) {
+    const info = ui.chatInfo.get(avatar);
+    const n = info?.state === 'done' ? ` ${info.chats.length}` : '';
+    const open = ui.expanded.has(avatar);
+    return `<div class="menu_button bm_chats_btn ${open ? 'bm_active' : ''}" title="${open ? 'ซ่อนแชท' : 'ดูแชทของบอทนี้'}"><i class="fa-solid fa-comments"></i>${n}</div>`;
 }
 
 function badgesHtml(r) {
@@ -149,8 +242,9 @@ function badgesHtml(r) {
 
 // ---------------------------------------------------------------- modal
 
-function openModal(tab) {
-    if (tab === 'chars' || tab === 'personas') ui.tab = tab;
+function openModal(tab, bookView) {
+    if (TABS.includes(tab)) ui.tab = tab;
+    if (bookView) ui.bookView = bookView;
     const old = document.getElementById('bm_modal');
     if (old) old._bmClose?.();
 
@@ -164,12 +258,14 @@ function openModal(tab) {
             </div>
             <div class="bm_tabs" role="tablist"></div>
             <div class="bm_tools">
-                <input id="bm_search" class="text_pole" type="search" placeholder="ค้นหาชื่อ / ไฟล์">
+                <input id="bm_search" class="text_pole" type="search">
                 <select id="bm_sort" class="text_pole" title="เรียงตาม">
                     <option value="name">ชื่อ A→Z</option>
                     <option value="added">เพิ่มล่าสุด</option>
                 </select>
             </div>
+            <div class="bm_subtabs" role="tablist"></div>
+            <div class="bm_status"></div>
             <div class="bm_body"></div>
             <div class="bm_foot"></div>
         </div>`;
@@ -208,11 +304,15 @@ function openModal(tab) {
 
     ui.confirm = null;
     renderAll();
+    if (ui.tab === 'books') lore.onShow();
 }
+
+const closeModal = () => document.getElementById('bm_modal')?._bmClose?.();
 
 function renderAll() {
     if (!document.getElementById('bm_modal')) return;
     pruneSelection();
+    lore.refreshModel();
     renderTabs();
     renderBody();
     renderFoot();
@@ -231,6 +331,7 @@ function renderTabs() {
     const tabs = [
         ['chars', 'fa-user', 'บอท', (ctx().characters ?? []).length],
         ['personas', 'fa-masks-theater', 'Persona', Object.keys(power_user.personas ?? {}).length],
+        ['books', 'fa-book-atlas', 'Lorebook', lore.bookNames().length],
     ];
     el.innerHTML = tabs.map(([id, icon, label, n]) => {
         const s = ui.selected[id].size;
@@ -243,14 +344,30 @@ function renderTabs() {
         ui.confirm = null;
         ui.lastClicked = null;
         renderAll();
+        if (ui.tab === 'books') lore.onShow();
     }));
     const sort = document.getElementById('bm_sort');
     if (sort) sort.style.display = ui.tab === 'chars' ? '' : 'none';
+    const search = document.getElementById('bm_search');
+    if (search) search.placeholder = ui.tab === 'books' ? 'ค้นหาชื่อเล่ม / การ์ด' : 'ค้นหาชื่อ / ไฟล์';
+    const sub = document.querySelector('#bm_modal .bm_subtabs');
+    const status = document.querySelector('#bm_modal .bm_status');
+    if (ui.tab === 'books') {
+        lore.renderSubtabs(sub);
+        lore.renderStatus(status);
+    } else {
+        sub.innerHTML = '';
+        status.innerHTML = '';
+    }
 }
 
 function renderBody() {
     const body = document.querySelector('#bm_modal .bm_body');
     if (!body) return;
+    if (ui.tab === 'books') {
+        lore.renderBody(body);
+        return;
+    }
     const rows = visibleRows();
     const s = sel();
     let html;
@@ -273,30 +390,48 @@ function renderBody() {
                     <div class="bm_sub">${escapeHtml(r.sub)}</div>
                     ${badgesHtml(r)}
                 </div>
-            </div>`).join('');
+                ${ui.tab === 'chars' ? chatsButtonHtml(r.key) : ''}
+            </div>${ui.tab === 'chars' && ui.expanded.has(r.key) ? chatListHtml(r.key) : ''}`).join('');
     }
     const scroll = body.scrollTop;
     body.innerHTML = html;
     body.scrollTop = scroll;
 
     const keys = rows.map(r => r.key);
-    body.querySelectorAll('.bm_row').forEach((row, i) => {
-        const key = keys[i];
-        const onPick = (e, on) => {
-            if (e.shiftKey && ui.lastClicked !== null && keys.includes(ui.lastClicked)) {
-                const a = keys.indexOf(ui.lastClicked);
-                const [lo, hi] = a < i ? [a, i] : [i, a];
-                toggleSel(keys.slice(lo, hi + 1), on);
-            } else {
-                toggleSel([key], on);
-            }
-            ui.lastClicked = key;
-        };
-        const cb = row.querySelector('.bm_cb');
-        cb.addEventListener('click', e => { e.stopPropagation(); onPick(e, cb.checked); });
-        row.addEventListener('click', e => onPick(e, !sel().has(key)));
-    });
+    body.querySelectorAll('.bm_row').forEach((row, i) => wireRow(row, keys[i], keys));
+    body.querySelectorAll('.bm_chats_btn').forEach(btn => btn.addEventListener('click', e => {
+        e.stopPropagation();
+        const avatar = btn.closest('.bm_row').dataset.key;
+        if (ui.expanded.has(avatar)) ui.expanded.delete(avatar);
+        else {
+            ui.expanded.add(avatar);
+            if (ui.chatInfo.get(avatar)?.state !== 'done') loadChats(avatar);
+        }
+        renderBody();
+    }));
+    for (const avatar of ui.expanded) if (!ui.chatInfo.has(avatar) && keys.includes(avatar)) loadChats(avatar);
     body.querySelector('.bm_allcb')?.addEventListener('change', e => toggleSel(keys, e.target.checked));
+}
+
+/**
+ * Tap the row or its checkbox to toggle; Shift-click selects a range.
+ * `keys` is the list in display order (null where ranges make no sense, e.g. grouped lists).
+ */
+function wireRow(row, key, keys) {
+    const onPick = (e, on) => {
+        if (e.shiftKey && keys && ui.lastClicked !== null && keys.includes(ui.lastClicked)) {
+            const a = keys.indexOf(ui.lastClicked);
+            const i = keys.indexOf(key);
+            const [lo, hi] = a < i ? [a, i] : [i, a];
+            toggleSel(keys.slice(lo, hi + 1), on);
+        } else {
+            toggleSel([key], on);
+        }
+        ui.lastClicked = key;
+    };
+    const cb = row.querySelector('.bm_cb');
+    cb.addEventListener('click', e => { e.stopPropagation(); onPick(e, cb.checked); });
+    row.addEventListener('click', e => onPick(e, !sel().has(key)));
 }
 
 function toggleSel(keys, on) {
@@ -323,6 +458,10 @@ function renderFoot() {
         foot.innerHTML = `<div class="bm_progress"><i class="fa-solid fa-spinner fa-spin"></i> ${escapeHtml(ui.progress)}</div>`;
         return;
     }
+    if (ui.tab === 'books') {
+        lore.renderFoot(foot);
+        return;
+    }
 
     const nameList = picked.map(r => escapeHtml(r.name || r.key)).join(' · ');
 
@@ -330,11 +469,18 @@ function renderFoot() {
         const isChars = ui.tab === 'chars';
         const kept = isChars ? [] : picked.filter(r => r.current);
         const targets = picked.filter(r => !kept.includes(r));
+        const loading = isChars && targets.some(r => {
+            const info = ui.chatInfo.get(r.key);
+            if (!info) loadChats(r.key);
+            return !info || info.state === 'loading';
+        });
         const warns = [];
         if (isChars) {
             warns.push('แชทที่เปิดอยู่ตอนนี้จะถูกปิดก่อนลบ (แบบเดียวกับตอนลบใน SillyTavern เอง)');
             const grouped = targets.filter(r => r.inGroups.length);
             if (grouped.length) warns.push(`${grouped.length} ตัวอยู่ในแชทกลุ่ม: ${grouped.map(r => escapeHtml(r.name)).join(', ')}`);
+            const books = lore.booksOfCharacters(targets.map(r => r.key));
+            if (books.length) warns.push(`lorebook ของบอทเหล่านี้ไม่ถูกลบไปด้วย (${books.map(escapeHtml).join(', ')}) ลบบอทเสร็จแล้วไปเก็บกวาดได้ที่แท็บ Lorebook › ไม่มีใครใช้`);
         } else {
             if (kept.length) warns.push(`ข้าม <b>${escapeHtml(kept[0].name)}</b> เพราะเป็น persona ที่ใช้อยู่ สลับไปใช้ตัวอื่นก่อนถ้าจะลบ`);
             const def = targets.find(r => r.isDefault);
@@ -345,20 +491,27 @@ function renderFoot() {
                 <div><b>ลบ ${targets.length} ${unit()}?</b> ลบแล้วกู้คืนจากเซิร์ฟเวอร์ไม่ได้</div>
                 <div class="bm_confirm_list">${targets.map(r => escapeHtml(r.name || r.key)).join(' · ')}</div>
                 ${warns.map(w => `<div class="bm_warn"><i class="fa-solid fa-triangle-exclamation"></i> ${w}</div>`).join('')}
-                ${isChars ? '<label class="checkbox_label"><input type="checkbox" id="bm_del_chats" checked> ลบแชทของบอทเหล่านี้ด้วย</label>' : ''}
-                <label class="checkbox_label"><input type="checkbox" id="bm_do_backup" checked> ดาวน์โหลดไฟล์สำรอง (.zip) ก่อนลบ</label>
+                ${isChars ? chatPickHtml(targets) : ''}
+                <label class="checkbox_label"><input type="checkbox" id="bm_do_backup" ${ui.delBackup ? 'checked' : ''}> ดาวน์โหลดไฟล์สำรอง (.zip) ก่อนลบ${isChars ? ' (การ์ด + แชทที่จะลบ)' : ''}</label>
                 <div class="bm_btns">
                     <div class="menu_button bm_cancel">ยกเลิก</div>
-                    <div class="menu_button redWarningBG bm_go ${targets.length ? '' : 'disabled'}"><i class="fa-solid fa-trash-can"></i> ลบ ${targets.length} ${unit()}</div>
+                    <div class="menu_button redWarningBG bm_go ${targets.length && !loading ? '' : 'disabled'}"><i class="fa-solid fa-trash-can"></i> ลบ ${targets.length} ${unit()}</div>
                 </div>
             </div>`;
+        const pick = foot.querySelector('.bm_chatpick');
+        if (pick) {
+            pick.scrollTop = chatPickScroll;
+            pick.addEventListener('scroll', () => { chatPickScroll = pick.scrollTop; });
+            wireChatPick(foot, targets.map(r => r.key));
+        }
+        const backupCb = foot.querySelector('#bm_do_backup');
+        backupCb.addEventListener('change', () => { ui.delBackup = backupCb.checked; });
         foot.querySelector('.bm_cancel').addEventListener('click', () => { ui.confirm = null; renderFoot(); });
         foot.querySelector('.bm_go').addEventListener('click', () => {
-            if (!targets.length) return;
-            const backup = foot.querySelector('#bm_do_backup').checked;
+            if (!targets.length || loading) return;
             const keys = targets.map(r => r.key);
-            if (isChars) doDeleteChars(keys, foot.querySelector('#bm_del_chats').checked, backup);
-            else doDeletePersonas(keys, backup);
+            if (isChars) doDeleteChars(keys, ui.delBackup);
+            else doDeletePersonas(keys, ui.delBackup);
         });
         return;
     }
@@ -400,7 +553,18 @@ function renderFoot() {
         </div>`;
     foot.querySelector('.bm_clear')?.addEventListener('click', () => toggleSel([...sel()], false));
     foot.querySelector('.bm_copy').addEventListener('click', () => { if (n) { ui.confirm = 'copy'; renderFoot(); } });
-    foot.querySelector('.bm_delete').addEventListener('click', () => { if (n) { ui.confirm = 'delete'; renderFoot(); } });
+    foot.querySelector('.bm_delete').addEventListener('click', () => {
+        if (!n) return;
+        // Fresh chat lists for the confirm step; what to keep starts from "delete everything" each time.
+        if (ui.tab === 'chars') {
+            for (const r of picked) ui.chatInfo.delete(r.key);
+            ui.keepChats.clear();
+            chatPickScroll = 0;
+        }
+        ui.delBackup = true;
+        ui.confirm = 'delete';
+        renderFoot();
+    });
     foot.querySelector('.bm_backup').addEventListener('click', () => {
         if (!n) return;
         const keys = picked.map(r => r.key);
@@ -411,6 +575,82 @@ function renderFoot() {
             toast.ok(`สำรอง ${keys.length} ${tab === 'chars' ? 'ตัว' : 'persona'} แล้ว`);
         });
     });
+}
+
+// ---------------------------------------------------------------- delete confirm: pick chats to keep
+
+let chatPickScroll = 0;
+
+/** Per-bot chat list in the delete confirm. Ticked = delete with the bot, unticked = keep the file. */
+function chatPickHtml(targets) {
+    const avatars = targets.map(r => r.key);
+    const plan = planCharDelete(avatars, ui.chatInfo, ui.keepChats);
+    const sections = targets.map(r => {
+        const info = ui.chatInfo.get(r.key);
+        const name = escapeHtml(r.name || r.key);
+        if (!info || info.state === 'loading') {
+            return `<div class="bm_cp_bot"><div class="bm_cp_head"><b>${name}</b> <span class="bm_dim"><i class="fa-solid fa-spinner fa-spin"></i> กำลังอ่านรายชื่อแชท…</span></div></div>`;
+        }
+        if (info.state === 'error') {
+            const del = !ui.keepChats.has(chatKey(r.key, '*'));
+            return `<div class="bm_cp_bot"><div class="bm_cp_head">
+                    <label class="checkbox_label"><input type="checkbox" class="bm_cp_all" data-avatar="${escapeHtml(r.key)}" ${del ? 'checked' : ''}> <b>${name}</b></label>
+                    <span class="bm_warn">อ่านรายชื่อแชทไม่ได้ · ${del ? 'ลบแชททั้งหมดของบอทนี้' : 'เก็บแชทไว้ทั้งหมด'}</span></div></div>`;
+        }
+        if (!info.chats.length) return `<div class="bm_cp_bot"><div class="bm_cp_head"><b>${name}</b> <span class="bm_dim">ไม่มีแชท</span></div></div>`;
+        const dels = info.chats.filter(c => !ui.keepChats.has(chatKey(r.key, c.file))).length;
+        const all = dels === info.chats.length;
+        return `<div class="bm_cp_bot">
+                <div class="bm_cp_head">
+                    <label class="checkbox_label"><input type="checkbox" class="bm_cp_all" data-avatar="${escapeHtml(r.key)}" ${all ? 'checked' : ''} ${dels && !all ? 'data-mixed="1"' : ''}> <b>${name}</b></label>
+                    <span class="bm_dim">${info.chats.length} แชท · ลบ ${dels} · เก็บ ${info.chats.length - dels}</span>
+                </div>
+                ${info.chats.map(c => {
+                    const del = !ui.keepChats.has(chatKey(r.key, c.file));
+                    return `<label class="bm_chat bm_cp_chat ${del ? '' : 'bm_kept'}" title="${escapeHtml(c.mes)}">
+                        <input type="checkbox" class="bm_cp_cb" data-avatar="${escapeHtml(r.key)}" data-file="${escapeHtml(c.file)}" ${del ? 'checked' : ''}>
+                        <div class="bm_chat_main"><div class="bm_chat_name">${escapeHtml(c.id)}</div><div class="bm_sub">${escapeHtml(chatMeta(c))}</div></div>
+                        <span class="bm_cp_tag">${del ? 'ลบ' : 'เก็บ'}</span>
+                    </label>`;
+                }).join('')}
+            </div>`;
+    }).join('');
+    const kept = plan.keptCount + plan.partial.filter(a => ui.chatInfo.get(a)?.state === 'error').length;
+    return `
+        <div class="bm_cp_title">
+            <b><i class="fa-solid fa-comments"></i> แชทของบอทเหล่านี้</b> <span class="bm_dim">ติ๊ก = ลบไปกับบอท · ไม่ติ๊ก = เก็บไฟล์แชทไว้</span>
+            <span class="bm_cp_quick"><span class="bm_link bm_cp_delall">ลบทั้งหมด</span> · <span class="bm_link bm_cp_keepall">เก็บทั้งหมด</span></span>
+        </div>
+        <div class="bm_chatpick">${sections}</div>
+        ${kept ? `<small class="bm_dim">แชทที่เก็บไว้ยังอยู่ในโฟลเดอร์ <code>chats/&lt;ชื่อไฟล์บอท&gt;</code> ถ้านำเข้าการ์ดชื่อไฟล์เดิมกลับมา แชทจะกลับมาให้เปิดได้ (ถ้าไม่ได้ใช้แล้ว ติ๊กสำรองไว้แล้วลบไปเลยก็ได้)</small>` : ''}`;
+}
+
+function wireChatPick(foot, avatars) {
+    const setKeep = (key, keep) => (keep ? ui.keepChats.add(key) : ui.keepChats.delete(key));
+    foot.querySelectorAll('.bm_cp_cb').forEach(cb => cb.addEventListener('change', () => {
+        setKeep(chatKey(cb.dataset.avatar, cb.dataset.file), !cb.checked);
+        renderFoot();
+    }));
+    foot.querySelectorAll('.bm_cp_all').forEach(cb => {
+        if (cb.dataset.mixed) cb.indeterminate = true;
+        cb.addEventListener('change', () => {
+            const avatar = cb.dataset.avatar;
+            const info = ui.chatInfo.get(avatar);
+            const files = info?.state === 'done' ? info.chats.map(c => c.file) : ['*'];
+            for (const f of files) setKeep(chatKey(avatar, f), !cb.checked);
+            renderFoot();
+        });
+    });
+    const all = keep => {
+        for (const avatar of avatars) {
+            const info = ui.chatInfo.get(avatar);
+            const files = info?.state === 'done' ? info.chats.map(c => c.file) : ['*'];
+            for (const f of files) setKeep(chatKey(avatar, f), keep);
+        }
+        renderFoot();
+    };
+    foot.querySelector('.bm_cp_delall')?.addEventListener('click', () => all(false));
+    foot.querySelector('.bm_cp_keepall')?.addEventListener('click', () => all(true));
 }
 
 function setProgress(text) {
@@ -446,7 +686,10 @@ function report(verb, done, failed, unitName) {
 
 // ---------------------------------------------------------------- characters
 
-/** Download cards (raw .png, re-importable) and optionally their chats as one .zip. Throws if anything can't be read. */
+/**
+ * Download cards (raw .png, re-importable) and optionally their chats as one .zip. Throws if anything can't be read.
+ * @param {boolean | ((avatar: string, file: string) => boolean)} withChats true = every chat, or a filter
+ */
 async function backupChars(avatars, withChats) {
     const files = [];
     const cardName = uniqueNamer();
@@ -465,7 +708,7 @@ async function backupChars(avatars, withChats) {
         const folder = `chats/${safeFileName(avatarStem(avatar), 'chats')}`;
         for (const chat of list) {
             const file = String(chat?.file_name ?? '');
-            if (!file) continue;
+            if (!file || (typeof withChats === 'function' && !withChats(avatar, file))) continue;
             const r = await postJson('/api/chats/export', { file, avatar_url: avatar, format: 'jsonl', exportfilename: file, is_group: false });
             const json = r.ok ? await r.json().catch(() => null) : null;
             if (typeof json?.result !== 'string') throw new Error(`อ่านแชท "${file}" ของ ${avatar} ไม่ได้ เลยยังไม่ทำอะไร`);
@@ -475,21 +718,43 @@ async function backupChars(avatars, withChats) {
     downloadBlob(makeZip(files), `characters-backup ${fileStamp()}.zip`);
 }
 
-async function doDeleteChars(avatars, deleteChats, withBackup) {
+async function doDeleteChars(avatars, withBackup) {
     await busy('กำลังลบ…', async () => {
-        if (withBackup) await backupChars(avatars, deleteChats);
+        const plan = planCharDelete(avatars, ui.chatInfo, ui.keepChats);
+        const fullSet = new Set(plan.full);
+        const dropSet = new Set(plan.chatDeletes.map(d => chatKey(d.avatar, d.file)));
+        // Bots whose chat list couldn't be read but were set to "keep": counted apart (number of files unknown).
+        const keptUnknown = plan.partial.filter(a => ui.chatInfo.get(a)?.state !== 'done');
+        if (withBackup) await backupChars(avatars, (a, f) => fullSet.has(a) || dropSet.has(chatKey(a, f)));
         setProgress(`กำลังลบ ${avatars.length} ตัว…`);
         // SillyTavern's own delete: closes the open chat once, cleans tags and
         // per-card warnings, fires CHARACTER_DELETED, then reloads the list.
-        const ok = await deleteCharacter(avatars, { deleteChats });
+        // Chats are all-or-nothing per call, so bots that keep some chats go in a second call.
+        let ok = false;
+        if (plan.full.length) ok = (await deleteCharacter(plan.full, { deleteChats: true })) !== false || ok;
+        if (plan.partial.length) ok = (await deleteCharacter(plan.partial, { deleteChats: false })) !== false || ok;
         const left = new Set((ctx().characters ?? []).map(c => c.avatar));
         const failed = avatars.filter(a => left.has(a));
-        if (ok === false && failed.length === avatars.length) {
+        if (!ok && failed.length === avatars.length) {
             toast.info('ยกเลิกแล้ว ยังไม่ได้ลบอะไร');
             return;
         }
+        // Bot is gone, its chat folder stays: now remove the chats that weren't kept.
+        const chatFails = [];
+        const todo = plan.chatDeletes.filter(d => !left.has(d.avatar));
+        const { eventSource, event_types: E } = ctx();
+        for (const [i, d] of todo.entries()) {
+            setProgress(`กำลังลบแชท ${i + 1}/${todo.length}…`);
+            const res = await postJson('/api/chats/delete', { chatfile: d.file, avatar_url: d.avatar });
+            if (res.ok) await eventSource.emit(E.CHAT_DELETED, d.file.replace(/\.jsonl$/, ''));
+            else chatFails.push(d.file);
+        }
         report('ลบ', avatars.length - failed.length, failed, 'ตัว');
-        for (const a of avatars) if (!left.has(a)) ui.selected.chars.delete(a);
+        if (chatFails.length) toast.err(`ลบแชทไม่สำเร็จ ${chatFails.length} ไฟล์: ${chatFails.join(', ')}`);
+        if (plan.keptCount) toast.info(`เก็บไฟล์แชทไว้ ${plan.keptCount} ไฟล์ ในโฟลเดอร์ chats`);
+        const unknown = keptUnknown.filter(a => !left.has(a));
+        if (unknown.length) toast.info(`เก็บแชททั้งหมดของ ${unknown.length} ตัวไว้ในโฟลเดอร์ chats`);
+        for (const a of avatars) if (!left.has(a)) { ui.selected.chars.delete(a); ui.expanded.delete(a); ui.chatInfo.delete(a); }
         ui.confirm = null;
     });
 }
@@ -693,13 +958,52 @@ function renderSettings() {
                 <div class="bm_btns">
                     <div class="menu_button menu_button_icon" id="bm_settings_chars"><i class="fa-solid fa-user"></i> จัดการบอท</div>
                     <div class="menu_button menu_button_icon" id="bm_settings_personas"><i class="fa-solid fa-masks-theater"></i> จัดการ persona</div>
+                    <div class="menu_button menu_button_icon" id="bm_settings_books"><i class="fa-solid fa-broom"></i> จัดการ lorebook</div>
                 </div>
-                <small class="bm_note">หรือกดปุ่ม <i class="fa-solid fa-layer-group"></i> ข้างปุ่ม Bulk edit ในรายชื่อบอท / ข้างปุ่ม Restore ในหน้า Persona หรือพิมพ์ <code>/bulk</code> (<code>/bulk personas</code>)</small>
+                <small class="bm_note">หรือกดปุ่ม <i class="fa-solid fa-layer-group"></i> ข้างปุ่ม Bulk edit ในรายชื่อบอท / ข้างปุ่ม Restore ในหน้า Persona / ปุ่ม <i class="fa-solid fa-broom"></i> ในแผง World Info หรือพิมพ์ <code>/bulk</code> (<code>/bulk personas</code>, <code>/bulk lore</code>)</small>
+                <hr class="sysHR">
+                <b>แผง World Info</b>
+                <label class="checkbox_label" title="บนมือถือ ช่อง Global ขึ้นแค่ว่า &quot;2 Items&quot; ตัวเลือกนี้จะแสดงชื่อเล่มใต้ช่องให้เห็นเลย (บนคอมช่องนี้แสดงชื่ออยู่แล้ว จึงไม่แสดงซ้ำ)"><input type="checkbox" id="bm_show_global"> แสดงชื่อเล่ม Global ใต้ช่อง Active World(s) for all chats</label>
+                <label class="checkbox_label"><input type="checkbox" id="bm_show_chat"> แสดงส่วน Active World(s) for this chat</label>
+                <div id="bm_old_loretidy" class="bm_note bm_warn" style="display:none"><i class="fa-solid fa-triangle-exclamation"></i> ยังติดตั้งส่วนขยาย Lore Tidy ตัวเก่าอยู่ ตอนนี้ Lore Tidy รวมอยู่ใน Bulk Manager แล้ว ถอน Lore Tidy ออกได้เลย (ระหว่างนี้แผง World Info ใช้ของ Lore Tidy ไปก่อน จะได้ไม่ขึ้นซ้ำ)</div>
             </div>
         </div>
     </div>`);
     document.getElementById('bm_settings_chars').addEventListener('click', () => openModal('chars'));
     document.getElementById('bm_settings_personas').addEventListener('click', () => openModal('personas'));
+    document.getElementById('bm_settings_books').addEventListener('click', () => openModal('books'));
+    const s = settings();
+    for (const [id, key] of [['bm_show_global', 'showGlobalChips'], ['bm_show_chat', 'showChatPanel']]) {
+        const el = document.getElementById(id);
+        el.checked = !!s[key];
+        el.addEventListener('change', () => { s[key] = el.checked; ctx().saveSettingsDebounced(); lore.renderPanel(); });
+    }
+}
+
+const SETTING_DEFAULTS = Object.freeze({ showGlobalChips: true, showChatPanel: true });
+const OLD_LORE_TIDY_MODULE = 'lore_tidy';
+
+function settings() {
+    const ext = ctx().extensionSettings;
+    ext[MODULE] ??= {};
+    const s = ext[MODULE];
+    // Coming from Lore Tidy: keep its World Info panel choices.
+    const old = ext[OLD_LORE_TIDY_MODULE];
+    for (const [k, v] of Object.entries(SETTING_DEFAULTS)) {
+        if (s[k] === undefined) s[k] = typeof old?.[k] === 'boolean' ? old[k] : v;
+    }
+    return s;
+}
+
+/** The standalone Lore Tidy is now part of this extension: tell the user once per session if it is still installed. */
+let oldLoreTidyNoticeShown = false;
+function checkOldLoreTidy() {
+    if (!lore.oldLoreTidyLoaded()) return;
+    const note = document.getElementById('bm_old_loretidy');
+    if (note) note.style.display = '';
+    if (oldLoreTidyNoticeShown) return;
+    oldLoreTidyNoticeShown = true;
+    toast.warn('Lore Tidy รวมอยู่ใน Bulk Manager แล้ว (แท็บ Lorebook) ถอนส่วนขยาย Lore Tidy ตัวเก่าออกได้เลย');
 }
 
 function registerCommand() {
@@ -708,11 +1012,20 @@ function registerCommand() {
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'bulk',
         callback: (_args, value) => {
-            openModal(/^p/i.test(String(value ?? '').trim()) ? 'personas' : 'chars');
+            const arg = String(value ?? '').trim();
+            openModal(/^p/i.test(arg) ? 'personas' : /^(l|b|w)/i.test(arg) ? 'books' : 'chars');
             return '';
         },
-        helpString: 'เปิด Bulk Manager — ลบ / คัดลอก / สำรองบอทหรือ persona ทีละหลายตัว ใส่ <code>personas</code> เพื่อเปิดแท็บ persona',
+        helpString: 'เปิด Bulk Manager — ลบ / คัดลอก / สำรองบอท persona หรือ lorebook ทีละหลายรายการ ใส่ <code>personas</code> หรือ <code>lore</code> เพื่อเปิดแท็บนั้น',
     }));
+    // Old Lore Tidy command; skipped while the old extension is still installed (it registers its own).
+    if (!lore.oldLoreTidyLoaded()) {
+        SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'loretidy',
+            callback: () => { openModal('books'); return ''; },
+            helpString: 'เปิดแท็บ Lorebook ของ Bulk Manager (เดิมคือ Lore Tidy) — ดูว่า lorebook แต่ละเล่มถูกใช้ที่ไหน และลบเล่มที่ไม่มีใครใช้',
+        }));
+    }
 }
 
 // ---------------------------------------------------------------- stale-code check
@@ -744,7 +1057,7 @@ async function checkForNewVersion() {
 
 async function reloadWithFreshFiles() {
     try {
-        await Promise.all(['index.js', 'lib.js', 'style.css', 'manifest.json'].map(f =>
+        await Promise.all(['index.js', 'lib.js', 'lorebooks.js', 'style.css', 'manifest.json'].map(f =>
             fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
     } finally {
         location.reload();
@@ -754,21 +1067,29 @@ async function reloadWithFreshFiles() {
 // ---------------------------------------------------------------- init
 
 function init() {
-    ctx().extensionSettings[MODULE] ??= {};
+    settings();
     injectButtons();
     renderSettings();
-    registerCommand();
+    lore.setupLorebooks({
+        ui, toast, busy, setProgress, report, downloadBlob, renderAll, renderSoon, renderBody, renderFoot,
+        toggleSel, wireRow, openModal, closeModal, settings,
+    });
     const { eventSource, event_types: E } = ctx();
     for (const ev of [E.APP_READY, E.CHARACTER_PAGE_LOADED].filter(Boolean)) eventSource.on(ev, injectButtons);
     for (const ev of [E.CHAT_CHANGED, E.CHARACTER_DELETED, E.CHARACTER_EDITED, E.CHARACTER_RENAMED, E.CHARACTER_PAGE_LOADED,
-        E.PERSONA_CHANGED, E.SETTINGS_UPDATED, E.GROUP_UPDATED].filter(Boolean)) {
+        E.PERSONA_CHANGED, E.SETTINGS_UPDATED, E.GROUP_UPDATED, E.WORLDINFO_SETTINGS_UPDATED, E.WORLDINFO_UPDATED].filter(Boolean)) {
         eventSource.on(ev, renderSoon);
     }
+    for (const ev of [E.CHAT_DELETED, E.CHAT_CREATED, E.GROUP_CHAT_CREATED, E.CHAT_RENAMED].filter(Boolean)) eventSource.on(ev, forgetChats);
+    // Every extension module has been loaded by APP_READY, so the old Lore Tidy is visible by then.
+    if (E.APP_READY) eventSource.on(E.APP_READY, () => { registerCommand(); checkOldLoreTidy(); });
+    else registerCommand();
+    setTimeout(checkOldLoreTidy, 3000);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForNewVersion(); });
     setTimeout(checkForNewVersion, 3000);
     console.log(LOG, 'loaded', `v${VERSION}`);
 }
 
-globalThis.BulkManager = { VERSION, open: openModal, checkForNewVersion, reloadWithFreshFiles };
+globalThis.BulkManager = { VERSION, open: openModal, checkForNewVersion, reloadWithFreshFiles, lore: lore.loreDebug };
 
 if (typeof jQuery === 'function') jQuery(init); else init();
