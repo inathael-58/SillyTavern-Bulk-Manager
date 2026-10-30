@@ -61,6 +61,44 @@ export function matchesQuery(query, ...fields) {
     return fields.some(f => String(f ?? '').toLowerCase().includes(q));
 }
 
+// ---------------------------------------------------------------- deleting characters: which chats go with them
+
+/** Key for one chat of one character in the "keep" set. `*` stands for every chat (used when the list couldn't be read). */
+export const chatKey = (avatar, file) => `${avatar}\n${file}`;
+
+/**
+ * Split a character delete into SillyTavern calls.
+ * @param {string[]} avatars characters to delete
+ * @param {Map<string, {state: string, chats: {file: string}[]}>} chatInfo chat lists that were read (state 'done')
+ * @param {Set<string>} keep chatKey()s the user wants to keep
+ * @returns {{full: string[], partial: string[], chatDeletes: {avatar: string, file: string}[], keptCount: number}}
+ *   full: delete with all their chats (deleteChats: true); partial: delete the character only,
+ *   then remove chatDeletes one by one.
+ */
+export function planCharDelete(avatars, chatInfo, keep) {
+    const full = [];
+    const partial = [];
+    const chatDeletes = [];
+    let keptCount = 0;
+    for (const avatar of avatars) {
+        const info = chatInfo.get(avatar);
+        if (info?.state !== 'done') {
+            if (keep.has(chatKey(avatar, '*'))) partial.push(avatar);
+            else full.push(avatar);
+            continue;
+        }
+        const drop = info.chats.filter(c => !keep.has(chatKey(avatar, c.file)));
+        keptCount += info.chats.length - drop.length;
+        if (drop.length === info.chats.length) {
+            full.push(avatar);
+        } else {
+            partial.push(avatar);
+            for (const c of drop) chatDeletes.push({ avatar, file: c.file });
+        }
+    }
+    return { full, partial, chatDeletes, keptCount };
+}
+
 // ---------------------------------------------------------------- lorebook usage model
 
 /**

@@ -235,3 +235,39 @@
 #bm_chat_panel .bm_link { text-decoration: underline; cursor: pointer; color: var(--SmartThemeQuoteColor, #e18a24); }
 #WIMultiSelector:has(#bm_global_chips, #bm_chat_panel) { flex-wrap: wrap; }
 #bm_global_chips, #bm_chat_panel { flex: 1 1 100%; width: 100%; box-sizing: border-box; }
+
+/* ---------------------------------------------------------------- character chats: list under a row, picker in the delete confirm */
+#bm_modal .bm_chats_btn { width: auto; margin: 0; padding: 5px 8px; flex-shrink: 0; white-space: nowrap; font-size: 0.85em; display: inline-flex; gap: 4px; align-items: center; }
+#bm_modal .bm_chats_btn.bm_active { border-color: var(--SmartThemeQuoteColor, #e18a24); color: var(--SmartThemeQuoteColor, #e18a24); }
+#bm_modal .bm_chatlist {
+    margin: 0 4px 6px 64px;
+    padding: 4px 8px;
+    border-left: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 50%, transparent);
+    font-size: 0.9em;
+}
+#bm_modal .bm_chat { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
+#bm_modal .bm_chat > i { opacity: 0.6; flex-shrink: 0; }
+#bm_modal .bm_chat_main { flex: 1; min-width: 0; }
+#bm_modal .bm_chat_name { overflow-wrap: anywhere; }
+
+#bm_modal .bm_cp_title { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; margin-top: 4px; }
+#bm_modal .bm_cp_quick { margin-left: auto; white-space: nowrap; }
+#bm_modal .bm_chatpick {
+    max-height: 32vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #555) 60%, transparent);
+    border-radius: 6px;
+    padding: 2px 8px;
+}
+#bm_modal .bm_cp_bot { padding: 4px 0; border-bottom: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor, #555) 45%, transparent); }
+#bm_modal .bm_cp_bot:last-child { border-bottom: none; }
+#bm_modal .bm_cp_head { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+#bm_modal .bm_cp_head .checkbox_label { margin: 0; }
+#bm_modal .bm_cp_chat { padding-left: 22px; cursor: pointer; margin: 0; }
+#bm_modal .bm_cp_chat input { margin: 0; flex-shrink: 0; }
+#bm_modal .bm_cp_tag { font-size: 0.75em; padding: 0 6px; border-radius: 8px; border: 1px solid #d9534f; color: #d9534f; flex-shrink: 0; }
+#bm_modal .bm_cp_chat.bm_kept .bm_cp_tag { border-color: #5cb85c; color: #5cb85c; }
+#bm_modal .bm_cp_chat.bm_kept .bm_chat_name { opacity: 0.75; }
+/* Long confirm (many bots / chats): scroll inside the footer instead of pushing the buttons off-screen. */
+#bm_modal .bm_foot { max-height: 82%; overflow-y: auto; overscroll-behavior: contain; }

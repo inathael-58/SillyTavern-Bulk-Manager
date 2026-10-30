@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     uniqueNamer, newPersonaId, cloneDescriptor, matchesQuery, safeFileName, avatarStem, makeZip, crc32,
-    buildLoreModel, isUnused, wipLeftoversInGlobal,
+    buildLoreModel, isUnused, wipLeftoversInGlobal, planCharDelete, chatKey,
 } from '../lib.js';
 
 test('uniqueNamer numbers clashes case-insensitively and keeps the extension', () => {
@@ -116,4 +116,21 @@ test('wipLeftoversInGlobal keeps only existing globals that WIP linked', () => {
     const exists = new Set(['A', 'B', 'C']);
     assert.deepEqual(wipLeftoversInGlobal(['A', 'B', 'X'], { c1: ['A', 'X'], c2: 'junk' }, exists), ['A']);
     assert.deepEqual(wipLeftoversInGlobal(['A'], undefined, exists), []);
+});
+
+test('planCharDelete splits bots by which chats they keep', () => {
+    const info = new Map([
+        ['a.png', { state: 'done', chats: [{ file: 'a1.jsonl' }, { file: 'a2.jsonl' }] }],
+        ['b.png', { state: 'done', chats: [{ file: 'b1.jsonl' }, { file: 'b2.jsonl' }] }],
+        ['c.png', { state: 'done', chats: [{ file: 'c1.jsonl' }] }],
+        ['d.png', { state: 'done', chats: [] }],
+        ['e.png', { state: 'error', chats: [] }],
+        ['f.png', { state: 'error', chats: [] }],
+    ]);
+    const keep = new Set([chatKey('b.png', 'b2.jsonl'), chatKey('c.png', 'c1.jsonl'), chatKey('f.png', '*')]);
+    const plan = planCharDelete(['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png', 'g.png'], info, keep);
+    assert.deepEqual(plan.full, ['a.png', 'd.png', 'e.png', 'g.png']);
+    assert.deepEqual(plan.partial, ['b.png', 'c.png', 'f.png']);
+    assert.deepEqual(plan.chatDeletes, [{ avatar: 'b.png', file: 'b1.jsonl' }]);
+    assert.equal(plan.keptCount, 2);
 });
