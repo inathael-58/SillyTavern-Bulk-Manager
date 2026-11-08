@@ -14,11 +14,25 @@ import {
     newPersonaId, cloneDescriptor, matchesQuery, makeZip, planCharDelete, chatKey,
 } from './lib.js';
 import * as lore from './lorebooks.js';
+import { createDiagnostics } from './diagnostics.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.0.0'; // keep in sync with manifest.json
+const VERSION = '2.0.1'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
+
+// Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.
+const DIAG = createDiagnostics({
+    name: 'Bulk Manager',
+    version: VERSION,
+    baseUrl: BASE_URL,
+    open: () => openModal(),
+    close: () => document.getElementById('bm_modal')?._bmClose?.(),
+    isOpen: () => !!document.getElementById('bm_modal'),
+    overlay: () => document.getElementById('bm_modal'),
+    frame: () => document.querySelector('#bm_modal .bm_dialog'),
+    state: () => `tab=${ui.tab}`,
+});
 
 const ctx = () => SillyTavern.getContext();
 const collator = new Intl.Collator(['th', 'en'], { sensitivity: 'base', numeric: true });
@@ -250,6 +264,7 @@ function openModal(tab, bookView) {
 
     const wrap = document.createElement('div');
     wrap.id = 'bm_modal';
+    DIAG.noteOpen(tab ?? '');
     wrap.innerHTML = `
         <div class="bm_dialog" role="dialog" aria-label="Bulk Manager">
             <div class="bm_head">
@@ -285,6 +300,7 @@ function openModal(tab, bookView) {
     const onKey = e => { if (e.key === 'Escape' && !ui.busy) close(); };
     document.addEventListener('keydown', onKey);
     function close() {
+        DIAG.noteClose();
         vv?.removeEventListener('resize', fit);
         vv?.removeEventListener('scroll', fit);
         window.removeEventListener('resize', fit);
@@ -303,8 +319,12 @@ function openModal(tab, bookView) {
     sort.addEventListener('change', () => { ui.sort = sort.value; ui.lastClicked = null; renderBody(); });
 
     ui.confirm = null;
-    renderAll();
-    if (ui.tab === 'books') lore.onShow();
+    try {
+        renderAll();
+        if (ui.tab === 'books') lore.onShow();
+    } catch (err) {
+        DIAG.reportError('วาด Bulk Manager ไม่ได้', err);
+    }
 }
 
 const closeModal = () => document.getElementById('bm_modal')?._bmClose?.();
@@ -970,6 +990,7 @@ function renderSettings() {
         </div>
     </div>`);
     document.getElementById('bm_settings_chars').addEventListener('click', () => openModal('chars'));
+    DIAG.mount(document.getElementById('bm_settings_chars').parentElement);
     document.getElementById('bm_settings_personas').addEventListener('click', () => openModal('personas'));
     document.getElementById('bm_settings_books').addEventListener('click', () => openModal('books'));
     const s = settings();
@@ -1009,6 +1030,7 @@ function checkOldLoreTidy() {
 function registerCommand() {
     const { SlashCommandParser, SlashCommand } = ctx();
     if (!SlashCommandParser || !SlashCommand) return;
+    DIAG.registerCommand(ctx(), 'bulk-debug');
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'bulk',
         callback: (_args, value) => {
@@ -1057,7 +1079,7 @@ async function checkForNewVersion() {
 
 async function reloadWithFreshFiles() {
     try {
-        await Promise.all(['index.js', 'lib.js', 'lorebooks.js', 'style.css', 'manifest.json'].map(f =>
+        await Promise.all(['index.js', 'lib.js', 'lorebooks.js', 'diagnostics.js', 'style.css', 'manifest.json'].map(f =>
             fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
     } finally {
         location.reload();
