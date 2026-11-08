@@ -21,6 +21,7 @@ Extensions → Install extension → วาง URL ของ repo นี้
 - **Persona** ปุ่ม **Bulk** ข้างปุ่ม Backup / Restore ในหน้า Persona Management
 - **Lorebook** ปุ่มไม้กวาด 🧹 ในแผง World Info ถัดจากปุ่ม Import
 - หรือพิมพ์ `/bulk` (บอท), `/bulk personas` หรือ `/bulk lore` (`/loretidy` ก็ยังใช้ได้)
+- เปิดไม่ขึ้นหรือมีอะไรแปลก ๆ บนมือถือ: Extensions → Bulk Manager → **ตรวจปัญหา** (หรือ `/bulk-debug`) ทดลองเปิดแล้วได้รายงานไว้คัดลอกส่งให้คนแก้
 - หรือไปที่ Extensions → Bulk Manager
 
 ## เลือก
