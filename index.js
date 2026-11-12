@@ -18,7 +18,7 @@ import { createDiagnostics } from './diagnostics.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.0.1'; // keep in sync with manifest.json
+const VERSION = '2.0.2'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 // Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.

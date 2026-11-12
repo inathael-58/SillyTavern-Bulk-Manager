@@ -271,3 +271,16 @@
 #bm_modal .bm_cp_chat.bm_kept .bm_chat_name { opacity: 0.75; }
 /* Long confirm (many bots / chats): scroll inside the footer instead of pushing the buttons off-screen. */
 #bm_modal .bm_foot { max-height: 82%; overflow-y: auto; overscroll-behavior: contain; }
+
+/* ---------------------------------------------------------------- solid surfaces
+   Blur Tint often carries alpha: glass themes pair it with a backdrop blur. A surface
+   with no blur of its own (a sticky header, or any panel once Fast UI's body.no-blur
+   strips every backdrop-filter) would let the chat or the list underneath show through,
+   so those paint the tint with its alpha dropped. `/ 1` matters: relative colour keeps
+   the source alpha when it is left out. */
+#bm_modal { --bm-solid: var(--SmartThemeBlurTintColor, #222); }
+@supports (color: rgb(from red r g b / 1)) {
+    #bm_modal { --bm-solid: rgb(from var(--SmartThemeBlurTintColor, #222) r g b / 1); }
+}
+#bm_modal .bm_group_head { background: var(--bm-solid); }
+body.no-blur #bm_modal .bm_dialog { background: var(--bm-solid); }
