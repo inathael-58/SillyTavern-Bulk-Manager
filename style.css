@@ -284,3 +284,14 @@
 }
 #bm_modal .bm_group_head { background: var(--bm-solid); }
 body.no-blur #bm_modal .bm_dialog { background: var(--bm-solid); }
+
+/* แม่แบบสีที่อ่านออกเสมอ (theme-palette.js) — เฉพาะแผงที่แสดงข้อมูล: พื้นทึบ และสีเน้น/ตัวอักษรตัดกับพื้นจริง
+   ทำงานเมื่อคำนวณสีสำเร็จแล้วเท่านั้น (<html class="bm-pal">) ถ้าไม่สำเร็จจะใช้สีธีมตรง ๆ แบบเดิม */
+html.bm-pal :is(#bm_modal, .bm_settings, #bm_chat_panel, #bm_global_chips) {
+    --SmartThemeBlurTintColor: var(--bm-p-surface);
+    --SmartThemeBodyColor: var(--bm-p-fg);
+    --SmartThemeQuoteColor: var(--bm-p-accent-text);
+    --SmartThemeEmColor: var(--bm-p-em);
+    --SmartThemeUnderlineColor: var(--bm-p-underline);
+    --SmartThemeBorderColor: var(--bm-p-line);
+}

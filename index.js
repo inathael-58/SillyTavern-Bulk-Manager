@@ -15,10 +15,11 @@ import {
 } from './lib.js';
 import * as lore from './lorebooks.js';
 import { createDiagnostics } from './diagnostics.js';
+import { installThemePalette } from './theme-palette.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.0.2'; // keep in sync with manifest.json
+const VERSION = '2.0.3'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 // Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.
@@ -1079,7 +1080,7 @@ async function checkForNewVersion() {
 
 async function reloadWithFreshFiles() {
     try {
-        await Promise.all(['index.js', 'lib.js', 'lorebooks.js', 'diagnostics.js', 'style.css', 'manifest.json'].map(f =>
+        await Promise.all(['index.js', 'lib.js', 'lorebooks.js', 'diagnostics.js', 'theme-palette.js', 'style.css', 'manifest.json'].map(f =>
             fetch(new URL(f, BASE_URL), { cache: 'reload' }).catch(() => null)));
     } finally {
         location.reload();
@@ -1089,6 +1090,8 @@ async function reloadWithFreshFiles() {
 // ---------------------------------------------------------------- init
 
 function init() {
+    // สีที่อ่านออกเสมอ: แผงข้อมูลทึบ สีเน้นตัดกับพื้นจริง (ดู theme-palette.js)
+    try { installThemePalette({ prefix: 'bm' }); } catch (err) { console.warn('[Bulk Manager] theme palette', err); }
     settings();
     injectButtons();
     renderSettings();
