@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     uniqueNamer, newPersonaId, cloneDescriptor, matchesQuery, safeFileName, avatarStem, makeZip, crc32,
     buildLoreModel, isUnused, wipLeftoversInGlobal, planCharDelete, chatKey,
+    apiTab, resolveSelection, selectionNote,
 } from '../lib.js';
 
 test('uniqueNamer numbers clashes case-insensitively and keeps the extension', () => {
@@ -133,4 +134,33 @@ test('planCharDelete splits bots by which chats they keep', () => {
     assert.deepEqual(plan.partial, ['b.png', 'c.png', 'f.png']);
     assert.deepEqual(plan.chatDeletes, [{ avatar: 'b.png', file: 'b1.jsonl' }]);
     assert.equal(plan.keptCount, 2);
+});
+
+test('apiTab maps public tab names and rejects unknown ones', () => {
+    assert.equal(apiTab('characters'), 'chars');
+    assert.equal(apiTab('personas'), 'personas');
+    assert.equal(apiTab('lore'), 'books');
+    assert.equal(apiTab('books'), 'books');
+    assert.equal(apiTab('chars'), 'chars');
+    assert.equal(apiTab('Characters'), null);
+    assert.equal(apiTab('toString'), null);
+    assert.equal(apiTab(undefined), null);
+});
+
+test('resolveSelection keeps known ids in order, reports unknown ones, drops junk', () => {
+    const known = ['Alice.png', 'Bob.png', 'Carol.png'];
+    assert.deepEqual(
+        resolveSelection(['Bob.png', 'Nope.png', 'Alice.png', 'Bob.png', '', 42, null, 'Gone.png'], known),
+        { found: ['Bob.png', 'Alice.png'], missing: ['Nope.png', 'Gone.png'] },
+    );
+    assert.deepEqual(resolveSelection('Carol.png', new Set(known)), { found: ['Carol.png'], missing: [] });
+    assert.deepEqual(resolveSelection(new Set(['Alice.png']), known), { found: ['Alice.png'], missing: [] });
+    assert.deepEqual(resolveSelection(undefined, known), { found: [], missing: [] });
+    assert.deepEqual(resolveSelection({ length: 1, 0: 'Alice.png' }, known), { found: [], missing: [] });
+    assert.deepEqual(resolveSelection(['a'], undefined), { found: [], missing: ['a'] });
+});
+
+test('selectionNote mentions missing ids only when there are some', () => {
+    assert.equal(selectionNote({ found: ['a', 'b'], missing: [] }), 'เลือกไว้ 2 รายการ');
+    assert.equal(selectionNote({ found: [], missing: ['x'] }), 'เลือกไว้ 0 รายการ · ไม่พบ 1 รายการ');
 });

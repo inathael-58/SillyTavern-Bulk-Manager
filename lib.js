@@ -61,6 +61,43 @@ export function matchesQuery(query, ...fields) {
     return fields.some(f => String(f ?? '').toLowerCase().includes(q));
 }
 
+// ---------------------------------------------------------------- public API: open with items pre-selected
+
+/** Public tab names (BulkManager.open) → internal tab ids. Internal ids are accepted too. */
+const API_TABS = { characters: 'chars', chars: 'chars', personas: 'personas', lore: 'books', books: 'books' };
+
+/** @returns {'chars'|'personas'|'books'|null} null for an unknown tab */
+export function apiTab(tab) {
+    return Object.hasOwn(API_TABS, String(tab)) ? API_TABS[String(tab)] : null;
+}
+
+/**
+ * Match ids handed in by another extension against what is loaded.
+ * Accepts an array (or any iterable, or a single string); drops duplicates, empty and non-string ids.
+ * @param {unknown} ids
+ * @param {Iterable<string>} known ids that exist (avatar files, persona ids, lorebook names)
+ * @returns {{found: string[], missing: string[]}} both in the order given
+ */
+export function resolveSelection(ids, known) {
+    const list = ids == null ? [] : typeof ids === 'string' ? [ids]
+        : typeof ids[Symbol.iterator] === 'function' ? [...ids] : [];
+    const have = known instanceof Set ? known : new Set(known ?? []);
+    const seen = new Set();
+    const found = [];
+    const missing = [];
+    for (const id of list) {
+        if (typeof id !== 'string' || !id || seen.has(id)) continue;
+        seen.add(id);
+        (have.has(id) ? found : missing).push(id);
+    }
+    return { found, missing };
+}
+
+/** Short note shown in the panel after an API open, e.g. "เลือกไว้ 3 รายการ · ไม่พบ 1 รายการ". */
+export function selectionNote({ found, missing }) {
+    return `เลือกไว้ ${found.length} รายการ${missing.length ? ` · ไม่พบ ${missing.length} รายการ` : ''}`;
+}
+
 // ---------------------------------------------------------------- deleting characters: which chats go with them
 
 /** Key for one chat of one character in the "keep" set. `*` stands for every chat (used when the list couldn't be read). */
