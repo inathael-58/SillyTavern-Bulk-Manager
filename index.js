@@ -12,6 +12,7 @@ import { getUserAvatars, getUserAvatar, user_avatar } from '../../../personas.js
 import {
     escapeHtml, fileStamp, safeFileName, uniqueNamer, avatarStem,
     newPersonaId, cloneDescriptor, matchesQuery, makeZip, planCharDelete, chatKey,
+    apiTab, resolveSelection, selectionNote,
 } from './lib.js';
 import * as lore from './lorebooks.js';
 import { createDiagnostics } from './diagnostics.js';
@@ -19,7 +20,7 @@ import { installThemePalette } from './theme-palette.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.0.3'; // keep in sync with manifest.json
+const VERSION = '2.1.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 // Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.
@@ -100,6 +101,8 @@ const ui = {
     keepChats: new Set(),
     /** @type {Set<string>} characters whose chat list is open in the list */
     expanded: new Set(),
+    /** Note after another extension opened the panel with a selection (BulkManager.open); cleared on the next change. */
+    apiNote: '',
 };
 
 const sel = () => ui.selected[ui.tab];
@@ -260,6 +263,7 @@ function badgesHtml(r) {
 function openModal(tab, bookView) {
     if (TABS.includes(tab)) ui.tab = tab;
     if (bookView) ui.bookView = bookView;
+    ui.apiNote = '';
     const old = document.getElementById('bm_modal');
     if (old) old._bmClose?.();
 
@@ -282,6 +286,7 @@ function openModal(tab, bookView) {
             </div>
             <div class="bm_subtabs" role="tablist"></div>
             <div class="bm_status"></div>
+            <div class="bm_apinote" role="status" hidden></div>
             <div class="bm_body"></div>
             <div class="bm_foot"></div>
         </div>`;
@@ -364,6 +369,7 @@ function renderTabs() {
         ui.tab = t.dataset.tab;
         ui.confirm = null;
         ui.lastClicked = null;
+        ui.apiNote = '';
         renderAll();
         if (ui.tab === 'books') lore.onShow();
     }));
@@ -379,6 +385,11 @@ function renderTabs() {
     } else {
         sub.innerHTML = '';
         status.innerHTML = '';
+    }
+    const note = document.querySelector('#bm_modal .bm_apinote');
+    if (note) {
+        note.textContent = ui.apiNote;
+        note.hidden = !ui.apiNote;
     }
 }
 
@@ -460,6 +471,7 @@ function toggleSel(keys, on) {
     const s = sel();
     for (const k of keys) on ? s.add(k) : s.delete(k);
     ui.confirm = null;
+    ui.apiNote = '';
     renderTabs();
     renderBody();
     renderFoot();
@@ -683,6 +695,7 @@ function setProgress(text) {
 async function busy(label, fn) {
     ui.busy = true;
     ui.progress = label;
+    ui.apiNote = '';
     const modal = document.getElementById('bm_modal');
     modal?.classList.add('bm_busy');
     renderFoot();
@@ -1087,6 +1100,75 @@ async function reloadWithFreshFiles() {
     }
 }
 
+// ---------------------------------------------------------------- public API (for other extensions)
+//
+// globalThis.BulkManager.open({ tab, select }) opens the panel with items pre-selected, so another
+// extension (Reverie, ex-Chat Browser) can hand its multi-select over for delete / backup / copy
+// instead of re-implementing them. It goes through openModal, the same path as /bulk.
+
+let initDone = false;
+let dataReady = false;
+const DATA_WAIT_MS = 30_000;
+
+/**
+ * Resolves once SillyTavern has loaded characters, personas and lorebooks: APP_READY was seen,
+ * or (extension loaded late / event missed) the character list is already filled in.
+ * Never rejects; after DATA_WAIT_MS it goes ahead with whatever is loaded.
+ */
+function whenDataReady() {
+    if (dataReady) return Promise.resolve();
+    return new Promise(resolve => {
+        const started = Date.now();
+        const tick = () => {
+            let haveChars = false;
+            try { haveChars = initDone && (ctx().characters?.length ?? 0) > 0; } catch { /* not up yet */ }
+            if (initDone && (dataReady || haveChars || Date.now() - started > DATA_WAIT_MS)) {
+                dataReady = true;
+                resolve();
+            } else {
+                setTimeout(tick, 150);
+            }
+        };
+        tick();
+    });
+}
+
+/**
+ * Open Bulk Manager, optionally replacing one tab's selection.
+ * @param {{tab?: 'characters'|'personas'|'lore', select?: string[]}} [opts]
+ *   select: characters → avatar files (`Alice.png`), personas → avatar ids, lore → lorebook names.
+ *   Unknown ids are skipped (the panel says how many). Leaving `select` out keeps the current selection.
+ * @returns {Promise<{tab: string, selected: string[], missing: string[]}>}
+ */
+async function apiOpen(opts = {}) {
+    if (typeof opts === 'string') opts = { tab: opts }; // old debug form: BulkManager.open('books')
+    const { tab = 'characters', select } = opts ?? {};
+    const id = apiTab(tab);
+    if (!id) throw new TypeError(`BulkManager.open: unknown tab "${tab}" (use characters, personas or lore)`);
+    await whenDataReady();
+    if (ui.busy) throw new Error('Bulk Manager กำลังทำงานอยู่ ลองใหม่เมื่อเสร็จ');
+
+    let picked = null;
+    if (select !== undefined) {
+        const known = id === 'chars' ? (ctx().characters ?? []).map(c => c?.avatar).filter(Boolean)
+            : id === 'personas' ? Object.keys(power_user.personas ?? {})
+                : lore.bookNames();
+        picked = resolveSelection(select, known);
+        ui.selected[id].clear();
+        for (const k of picked.found) ui.selected[id].add(k);
+        if (picked.missing.length) console.info(LOG, 'open: not found', picked.missing);
+    }
+    // Make sure the selection is in view: no leftover search, and every lorebook listed (not just unused ones).
+    ui.query = '';
+    ui.lastClicked = null;
+    openModal(id, id === 'books' && picked ? 'all' : undefined);
+    if (picked) {
+        ui.apiNote = selectionNote(picked);
+        renderTabs();
+    }
+    return { tab, selected: [...ui.selected[id]], missing: picked ? picked.missing : [] };
+}
+
 // ---------------------------------------------------------------- init
 
 function init() {
@@ -1112,9 +1194,18 @@ function init() {
     setTimeout(checkOldLoreTidy, 3000);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForNewVersion(); });
     setTimeout(checkForNewVersion, 3000);
+    if (E.APP_READY) eventSource.on(E.APP_READY, () => { dataReady = true; });
+    else dataReady = true;
+    initDone = true;
     console.log(LOG, 'loaded', `v${VERSION}`);
 }
 
-globalThis.BulkManager = { VERSION, open: openModal, checkForNewVersion, reloadWithFreshFiles, lore: lore.loreDebug };
+// Set as soon as this module runs, so other extensions can call open() any time; it waits for data itself.
+globalThis.BulkManager = {
+    version: VERSION,
+    open: apiOpen,
+    // debug helpers
+    VERSION, checkForNewVersion, reloadWithFreshFiles, lore: lore.loreDebug,
+};
 
 if (typeof jQuery === 'function') jQuery(init); else init();

@@ -295,3 +295,12 @@ html.bm-pal :is(#bm_modal, .bm_settings, #bm_chat_panel, #bm_global_chips) {
     --SmartThemeUnderlineColor: var(--bm-p-underline);
     --SmartThemeBorderColor: var(--bm-p-line);
 }
+
+/* After another extension opened the panel with a selection (BulkManager.open) */
+#bm_modal .bm_apinote {
+    padding: 5px 12px;
+    font-size: 0.8em;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #555);
+}
+#bm_modal .bm_apinote[hidden] { display: none; }
