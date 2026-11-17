@@ -638,6 +638,20 @@ async function unlinkChatLore(fix, book) {
     return true;
 }
 
+/**
+ * Chat Auto Backup (with Dropbox sync) only notices header-only changes of the open chat by
+ * itself. Without this, Dropbox keeps the old header with the link, and a later sync from
+ * another device can write it back.
+ */
+async function tellAutoBackup(fix) {
+    if (!fix.char?.avatar) return;
+    try {
+        await globalThis.ChatAutoBackup?.noteServerChange?.({ type: 'character', avatar: fix.char.avatar, chatId: fix.file });
+    } catch (e) {
+        console.warn(LOG, 'Chat Auto Backup', e);
+    }
+}
+
 async function unlinkChats(items) {
     if (!items.length) return;
     if (items.length > 1 && !confirm(`ถอดลิงก์ Chat Lore ที่ชี้ไปยังเล่มที่ไม่มีแล้ว ${items.length} แชท?\nข้อความในแชทไม่ถูกแตะ แก้แค่ส่วนหัวของไฟล์แชท`)) return;
@@ -648,6 +662,7 @@ async function unlinkChats(items) {
             host.setProgress(`กำลังถอดลิงก์ ${i + 1}/${items.length}`);
             try {
                 await unlinkChatLore(x.fix, x.book);
+                await tellAutoBackup(x.fix);
                 chatScan.links = chatScan.links.filter(l => !(l.file === x.fix.file && l.book === x.book));
                 done++;
             } catch (e) {
