@@ -526,11 +526,13 @@ function toolsHtml(m) {
 
     // 4) links to books that don't exist
     if (m.missing.length) {
+        const chatFixes = m.missing.filter(x => x.fix?.type === 'chat').length;
         parts.push(`
             <div class="bm_card">
                 <div class="bm_card_title"><i class="fa-solid fa-link-slash"></i> ลิงก์ไปยังเล่มที่ไม่มีแล้ว (${m.missing.length})</div>
-                <div class="bm_dim">เล่มเสริมถอดลิงก์จากตรงนี้ได้ ส่วนเล่มหลักของการ์ดหรือ Chat Lore ให้เปิดการ์ด/แชทนั้นแล้วเลือกเล่มใหม่</div>
+                <div class="bm_dim">Chat Lore และเล่มเสริมถอดลิงก์จากตรงนี้ได้เลย ไม่ต้องเปิดแชท ส่วนเล่มหลักของการ์ด ให้เปิดการ์ดนั้นแล้วเลือกเล่มใหม่</div>
                 ${m.missing.map((x, i) => `<div class="bm_mini">${escapeHtml(x.where)} → <b>${escapeHtml(x.book)}</b>${x.fix ? ` <span class="bm_link bm_fixmissing" data-i="${i}">ถอดลิงก์</span>` : ''}</div>`).join('')}
+                ${chatFixes > 1 ? `<div class="bm_btns"><div class="menu_button" id="bm_unlink_chats"><i class="fa-solid fa-link-slash"></i> ถอดลิงก์ Chat Lore ทั้งหมด (${chatFixes})</div></div>` : ''}
             </div>`);
     }
 
@@ -575,6 +577,10 @@ function wireTools(body) {
     });
     body.querySelectorAll('.bm_fixmissing').forEach(el => el.addEventListener('click', () => {
         const x = getModel().missing[Number(el.dataset.i)];
+        if (x?.fix?.type === 'chat') {
+            unlinkChats([x]);
+            return;
+        }
         const entry = world_info?.charLore?.find(e => e.name === x?.fix?.stem);
         if (!entry) return;
         entry.extraBooks = (entry.extraBooks ?? []).filter(b => b !== x.book);
@@ -582,12 +588,90 @@ function wireTools(body) {
         c.saveSettingsDebounced();
         host.renderAll();
     }));
+    body.querySelector('#bm_unlink_chats')?.addEventListener('click', () => {
+        unlinkChats(getModel().missing.filter(x => x.fix?.type === 'chat'));
+    });
     body.querySelector('#bm_clean_stale')?.addEventListener('click', () => {
         const stale = new Set(getModel().staleCharLore);
         world_info.charLore = (world_info.charLore ?? []).filter(e => !stale.has(e));
         c.saveSettingsDebounced();
         host.toast.ok(`ล้างแล้ว ${stale.size} รายการ`);
         host.renderAll();
+    });
+}
+
+/**
+ * Remove a chat's Chat Lore link to `book`.
+ * SillyTavern's own picker can't do this when the book is gone: the missing book has no option,
+ * so the picker already shows "None" and choosing it fires no change. The open chat is changed
+ * in memory and saved by SillyTavern; any other chat is rewritten on the server with only its
+ * header changed (same integrity slug, so a tab holding an older copy still can't save over it).
+ * @returns {Promise<boolean>} true if the link is gone (also when it was already gone)
+ */
+async function unlinkChatLore(fix, book) {
+    const c = ctx();
+    if (c.chatId && String(c.chatId) === fix.file) {
+        if (c.chatMetadata?.world_info === book) {
+            delete c.chatMetadata.world_info;
+            $('.chat_lorebook_button').removeClass('world_set');
+            await c.saveMetadata();
+        }
+        return true;
+    }
+    if (!fix.char?.avatar) throw new Error('ไม่รู้ว่าแชทนี้เป็นของการ์ดไหน');
+    const headers = c.getRequestHeaders();
+    const where = { ch_name: fix.char.name, file_name: fix.file, avatar_url: fix.char.avatar };
+    const res = await fetch('/api/chats/get', { method: 'POST', headers, body: JSON.stringify(where), cache: 'no-cache' });
+    if (!res.ok) throw new Error(`อ่านแชทไม่ได้ (${res.status})`);
+    const chat = await res.json();
+    const head = Array.isArray(chat) ? chat[0] : null;
+    if (!head || typeof head !== 'object' || !('chat_metadata' in head || 'user_name' in head)) {
+        throw new Error('ไม่พบไฟล์แชท หรือไฟล์ไม่มีส่วนหัว');
+    }
+    if (head.chat_metadata?.world_info !== book) return true; // changed elsewhere meanwhile
+    delete head.chat_metadata.world_info;
+    const save = await fetch('/api/chats/save', { method: 'POST', headers, body: JSON.stringify({ ...where, chat }) });
+    if (!save.ok) {
+        const err = await save.json().catch(() => null);
+        throw new Error(err?.error === 'integrity' ? 'แชทนี้เพิ่งถูกแก้จากที่อื่น ลองสแกนใหม่' : `บันทึกแชทไม่ได้ (${save.status})`);
+    }
+    return true;
+}
+
+/**
+ * Chat Auto Backup (with Dropbox sync) only notices header-only changes of the open chat by
+ * itself. Without this, Dropbox keeps the old header with the link, and a later sync from
+ * another device can write it back.
+ */
+async function tellAutoBackup(fix) {
+    if (!fix.char?.avatar) return;
+    try {
+        await globalThis.ChatAutoBackup?.noteServerChange?.({ type: 'character', avatar: fix.char.avatar, chatId: fix.file });
+    } catch (e) {
+        console.warn(LOG, 'Chat Auto Backup', e);
+    }
+}
+
+async function unlinkChats(items) {
+    if (!items.length) return;
+    if (items.length > 1 && !confirm(`ถอดลิงก์ Chat Lore ที่ชี้ไปยังเล่มที่ไม่มีแล้ว ${items.length} แชท?\nข้อความในแชทไม่ถูกแตะ แก้แค่ส่วนหัวของไฟล์แชท`)) return;
+    await host.busy('กำลังถอดลิงก์…', async () => {
+        const failed = [];
+        let done = 0;
+        for (const [i, x] of items.entries()) {
+            host.setProgress(`กำลังถอดลิงก์ ${i + 1}/${items.length}`);
+            try {
+                await unlinkChatLore(x.fix, x.book);
+                await tellAutoBackup(x.fix);
+                chatScan.links = chatScan.links.filter(l => !(l.file === x.fix.file && l.book === x.book));
+                done++;
+            } catch (e) {
+                console.error(LOG, 'unlink chat lore', x.fix.file, e);
+                failed.push(`${x.fix.file} (${e?.message ?? e})`);
+            }
+        }
+        refreshModel();
+        host.report('ถอดลิงก์', done, failed, 'แชท');
     });
 }
 

@@ -161,7 +161,7 @@ export function buildLoreModel(input) {
     const exists = new Set(names);
     /** @type {Map<string, Usage>} */
     const usage = new Map(names.map(n => [n, { global: false, chars: [], personas: [], chats: [], wip: [] }]));
-    /** @type {{book: string, where: string, fix?: {type: 'extra', stem: string}}[]} */
+    /** @type {{book: string, where: string, fix?: {type: 'extra', stem: string} | {type: 'chat', file: string, char: {name: string, avatar: string} | null, open: boolean}}[]} */
     const missing = [];
     const touch = (book, where, fix) => {
         if (usage.has(book)) return usage.get(book);
@@ -210,11 +210,14 @@ export function buildLoreModel(input) {
     const currentId = input.currentChatId ? String(input.currentChatId) : null;
     for (const l of input.chatLinks ?? []) {
         if (l.file === currentId || !avatars.has(l.char?.avatar)) continue;
-        touch(l.book, `แชท ${l.char.name} — ${l.file}`)?.chats.push({ char: l.char, file: l.file });
+        touch(l.book, `แชท ${l.char.name} — ${l.file}`, { type: 'chat', file: l.file, char: l.char, open: false })
+            ?.chats.push({ char: l.char, file: l.file });
     }
     const liveBook = input.liveBook;
     if (currentId && typeof liveBook === 'string' && liveBook) {
-        touch(liveBook, `แชทที่เปิดอยู่ (${currentId})`)?.chats.push({ char: input.currentRef ?? null, file: currentId });
+        const char = input.currentRef ?? null;
+        touch(liveBook, `แชทที่เปิดอยู่ (${currentId})`, { type: 'chat', file: currentId, char, open: true })
+            ?.chats.push({ char, file: currentId });
     }
 
     // WorldInfoPlus "multi chat lore" links (kept in settings even after WIP is removed).

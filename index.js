@@ -20,7 +20,7 @@ import { installThemePalette } from './theme-palette.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.1.0'; // keep in sync with manifest.json
+const VERSION = '2.2.0'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 // Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.

@@ -107,6 +107,17 @@ test('buildLoreModel reports dangling links and stale extra-book entries', () =>
     assert.deepEqual(m.staleCharLore.map(e => e.name), ['Deleted']);
 });
 
+test('buildLoreModel marks dead chat-lore links with the chat to unlink', () => {
+    const m = buildLoreModel(loreInput({
+        chatLinks: [{ book: 'Gone Chat', char: { name: 'Bob', avatar: 'Bob.png' }, file: 'Bob - 3' }],
+        liveBook: 'Gone Live',
+    }));
+    assert.deepEqual(m.missing.find(x => x.book === 'Gone Chat').fix,
+        { type: 'chat', file: 'Bob - 3', char: { name: 'Bob', avatar: 'Bob.png' }, open: false });
+    assert.deepEqual(m.missing.find(x => x.book === 'Gone Live').fix,
+        { type: 'chat', file: 'Alice - open', char: { name: 'Alice', avatar: 'Alice.png' }, open: true });
+});
+
 test('buildLoreModel copes with empty input', () => {
     const m = buildLoreModel({});
     assert.deepEqual(m.names, []);
