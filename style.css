@@ -1,10 +1,25 @@
 /* Bulk Manager — uses SillyTavern theme variables so it follows any theme */
 
+/* One visual system. Shape lock: the window 10, rows and boxes 6, badges and tags round.
+   Badge and state text use theme-palette.js shades (same hue, 4.5:1 on the panel), with
+   the old fixed colors as fallback. "In use" is the theme accent; the other badges are
+   group colors, not accents. */
+#bm_modal, .bm_settings {
+    --bm-r-panel: 10px;
+    --bm-r-ctl: 6px;
+    --bm-r-pill: 999px;
+    --bm-blue: var(--bm-p-blue, #4ea8de);
+    --bm-purple: var(--bm-p-purple, #b48ead);
+    --bm-warn-text: var(--bm-p-warn-text, #e0a030);
+    --bm-ok-text: var(--bm-p-ok-text, #5cb85c);
+    --bm-bad-text: var(--bm-p-bad-text, #d9534f);
+}
+
 .bm_settings .bm_note { display: block; opacity: 0.7; margin-top: 6px; }
 .bm_settings .bm_btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .bm_settings .menu_button { width: auto; }
 .bm_version { opacity: 0.6; font-weight: normal; }
-.bm_settings .bm_warn { color: #e0a030; }
+.bm_settings .bm_warn { color: var(--bm-warn-text); }
 
 /* Sized to the visible viewport from JS; the values below are the fallback. */
 #bm_modal {
@@ -41,7 +56,7 @@
     backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
     color: var(--SmartThemeBodyColor, #ddd);
     border: 1px solid var(--SmartThemeBorderColor, #555);
-    border-radius: 10px;
+    border-radius: var(--bm-r-panel);
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
     overflow: hidden;
 }
@@ -88,7 +103,7 @@
 #bm_modal .bm_body { overflow-y: auto; overscroll-behavior: contain; padding: 4px 10px 10px; flex: 1 1 auto; min-height: 0; }
 #bm_modal .bm_empty { padding: 28px; text-align: center; opacity: 0.7; }
 #bm_modal .bm_dim { opacity: 0.65; font-weight: 400; }
-#bm_modal .bm_warn { color: #e0a030; }
+#bm_modal .bm_warn { color: var(--bm-warn-text); }
 #bm_modal .bm_link { text-decoration: underline; cursor: pointer; color: var(--SmartThemeQuoteColor, #e18a24); white-space: nowrap; }
 #bm_modal .bm_listhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 4px 2px; font-size: 0.9em; }
 #bm_modal .bm_listhead .checkbox_label { margin: 0; }
@@ -103,11 +118,11 @@
     border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #555) 45%, transparent);
     cursor: pointer;
     user-select: none;
-    border-radius: 6px;
+    border-radius: var(--bm-r-ctl);
 }
 #bm_modal .bm_row.bm_sel { background: color-mix(in srgb, var(--SmartThemeQuoteColor, #e18a24) 14%, transparent); }
 #bm_modal .bm_row input[type="checkbox"] { flex-shrink: 0; margin: 0; }
-#bm_modal .bm_avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: color-mix(in srgb, var(--SmartThemeBorderColor, #555) 40%, transparent); }
+#bm_modal .bm_avatar { width: 40px; height: 40px; border-radius: var(--bm-r-pill); object-fit: cover; flex-shrink: 0; background: color-mix(in srgb, var(--SmartThemeBorderColor, #555) 40%, transparent); }
 #bm_modal .bm_main { flex: 1; min-width: 0; }
 #bm_modal .bm_name { font-weight: 600; overflow-wrap: anywhere; }
 #bm_modal .bm_sub { font-size: 0.75em; opacity: 0.6; overflow-wrap: anywhere; }
@@ -115,17 +130,17 @@
 #bm_modal .bm_badge {
     font-size: 0.75em;
     padding: 1px 7px;
-    border-radius: 8px;
+    border-radius: var(--bm-r-pill);
     border: 1px solid var(--SmartThemeBorderColor, #555);
     white-space: nowrap;
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-#bm_modal .bm_b_current { border-color: #4ea8de; color: #4ea8de; }
-#bm_modal .bm_b_global { border-color: #4ea8de; color: #4ea8de; }
-#bm_modal .bm_b_wip { border-color: #b48ead; color: #b48ead; }
-#bm_modal .bm_b_unused { border-color: #e0a030; color: #e0a030; }
+#bm_modal .bm_b_current { border-color: var(--SmartThemeQuoteColor, #e18a24); color: var(--SmartThemeQuoteColor, #e18a24); }
+#bm_modal .bm_b_global { border-color: var(--bm-blue); color: var(--bm-blue); }
+#bm_modal .bm_b_wip { border-color: var(--bm-purple); color: var(--bm-purple); }
+#bm_modal .bm_b_unused { border-color: var(--bm-warn-text); color: var(--bm-warn-text); }
 #bm_modal .bm_note { font-size: 0.75em; font-weight: 400; opacity: 0.7; }
 #bm_modal .bm_banner { font-size: 0.85em; padding: 6px 4px; }
 #bm_modal .bm_row .bm_open { width: auto; margin: 0; padding: 6px 8px; flex-shrink: 0; }
@@ -143,7 +158,7 @@
     border-bottom: 1px solid var(--SmartThemeBorderColor, #555);
 }
 #bm_modal .bm_group_head input { margin: 0; }
-#bm_modal .bm_gavatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+#bm_modal .bm_gavatar { width: 28px; height: 28px; border-radius: var(--bm-r-pill); object-fit: cover; flex-shrink: 0; }
 #bm_modal .bm_group_title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 #bm_modal .bm_group .bm_row { padding-left: 18px; }
 
@@ -151,7 +166,7 @@
     margin: 8px 0;
     padding: 8px 10px;
     border: 1px solid var(--SmartThemeBorderColor, #555);
-    border-radius: 8px;
+    border-radius: var(--bm-r-pill);
     font-size: 0.9em;
 }
 #bm_modal .bm_card_title { font-weight: 600; margin-bottom: 4px; cursor: default; }
@@ -202,7 +217,7 @@
     gap: 6px;
     max-width: 100%;
     padding: 3px 9px;
-    border-radius: 14px;
+    border-radius: 999px;
     border: 1px solid var(--SmartThemeBorderColor, #555);
     background: color-mix(in srgb, var(--SmartThemeBorderColor, #555) 22%, transparent);
     font-size: 0.9em;
@@ -257,7 +272,7 @@
     overflow-y: auto;
     overscroll-behavior: contain;
     border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor, #555) 60%, transparent);
-    border-radius: 6px;
+    border-radius: var(--bm-r-ctl);
     padding: 2px 8px;
 }
 #bm_modal .bm_cp_bot { padding: 4px 0; border-bottom: 1px dashed color-mix(in srgb, var(--SmartThemeBorderColor, #555) 45%, transparent); }
@@ -266,8 +281,8 @@
 #bm_modal .bm_cp_head .checkbox_label { margin: 0; }
 #bm_modal .bm_cp_chat { padding-left: 22px; cursor: pointer; margin: 0; }
 #bm_modal .bm_cp_chat input { margin: 0; flex-shrink: 0; }
-#bm_modal .bm_cp_tag { font-size: 0.75em; padding: 0 6px; border-radius: 8px; border: 1px solid #d9534f; color: #d9534f; flex-shrink: 0; }
-#bm_modal .bm_cp_chat.bm_kept .bm_cp_tag { border-color: #5cb85c; color: #5cb85c; }
+#bm_modal .bm_cp_tag { font-size: 0.75em; padding: 0 6px; border-radius: var(--bm-r-pill); border: 1px solid var(--bm-bad-text); color: var(--bm-bad-text); flex-shrink: 0; }
+#bm_modal .bm_cp_chat.bm_kept .bm_cp_tag { border-color: var(--bm-ok-text); color: var(--bm-ok-text); }
 #bm_modal .bm_cp_chat.bm_kept .bm_chat_name { opacity: 0.75; }
 /* Long confirm (many bots / chats): scroll inside the footer instead of pushing the buttons off-screen. */
 #bm_modal .bm_foot { max-height: 82%; overflow-y: auto; overscroll-behavior: contain; }

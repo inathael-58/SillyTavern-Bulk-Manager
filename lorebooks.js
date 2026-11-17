@@ -326,7 +326,7 @@ export function renderBody(body) {
             .filter(({ name, u }) => (view === 'all' || isUnused(u)) && matchesBook(name, u));
         if (!rows.length) {
             html = view === 'unused' && !host.ui.query
-                ? '<div class="bm_empty">ไม่มีเล่มที่ไม่มีใครใช้ 🎉</div>'
+                ? '<div class="bm_empty"><i class="fa-solid fa-circle-check"></i> ไม่มีเล่มที่ไม่มีใครใช้</div>'
                 : '<div class="bm_empty">ไม่พบเล่มที่ตรงกับคำค้น</div>';
         } else {
             keys = rows.map(r => r.name);
@@ -547,7 +547,7 @@ function toolsHtml(m) {
             </div>`);
     }
 
-    if (!parts.length) parts.push('<div class="bm_empty">ไม่มีลิงก์ค้าง 👍</div>');
+    if (!parts.length) parts.push('<div class="bm_empty"><i class="fa-solid fa-circle-check"></i> ไม่มีลิงก์ค้าง</div>');
     return parts.join('');
 }
 

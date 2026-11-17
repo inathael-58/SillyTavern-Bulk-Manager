@@ -20,7 +20,7 @@ import { installThemePalette } from './theme-palette.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.2.0'; // keep in sync with manifest.json
+const VERSION = '2.2.1'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 // Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.
@@ -249,12 +249,12 @@ function chatsButtonHtml(avatar) {
 
 function badgesHtml(r) {
     const b = [];
-    if (r.current) b.push(`<span class="bm_badge bm_b_current">${ui.tab === 'chars' ? '💬 แชทอยู่' : '🎭 ใช้อยู่'}</span>`);
-    if (r.fav) b.push('<span class="bm_badge">⭐ Favorite</span>');
-    if (r.inGroups?.length) b.push(`<span class="bm_badge" title="${escapeHtml(r.inGroups.join(', '))}">👥 อยู่ใน ${r.inGroups.length} กลุ่ม</span>`);
-    if (r.isDefault) b.push('<span class="bm_badge">👑 Default</span>');
-    if (r.locked) b.push('<span class="bm_badge">🔒 ล็อกกับแชทนี้</span>');
-    if (r.connections) b.push(`<span class="bm_badge">🔗 ผูกกับ ${r.connections} การ์ด</span>`);
+    if (r.current) b.push(`<span class="bm_badge bm_b_current">${ui.tab === 'chars' ? '<i class="fa-solid fa-comment"></i> แชทอยู่' : '<i class="fa-solid fa-masks-theater"></i> ใช้อยู่'}</span>`);
+    if (r.fav) b.push('<span class="bm_badge"><i class="fa-solid fa-star"></i> Favorite</span>');
+    if (r.inGroups?.length) b.push(`<span class="bm_badge" title="${escapeHtml(r.inGroups.join(', '))}"><i class="fa-solid fa-users"></i> อยู่ใน ${r.inGroups.length} กลุ่ม</span>`);
+    if (r.isDefault) b.push('<span class="bm_badge"><i class="fa-solid fa-crown"></i> Default</span>');
+    if (r.locked) b.push('<span class="bm_badge"><i class="fa-solid fa-lock"></i> ล็อกกับแชทนี้</span>');
+    if (r.connections) b.push(`<span class="bm_badge"><i class="fa-solid fa-link"></i> ผูกกับ ${r.connections} การ์ด</span>`);
     return b.length ? `<div class="bm_badges">${b.join('')}</div>` : '';
 }
 
@@ -1173,7 +1173,7 @@ async function apiOpen(opts = {}) {
 
 function init() {
     // สีที่อ่านออกเสมอ: แผงข้อมูลทึบ สีเน้นตัดกับพื้นจริง (ดู theme-palette.js)
-    try { installThemePalette({ prefix: 'bm' }); } catch (err) { console.warn('[Bulk Manager] theme palette', err); }
+    try { installThemePalette({ prefix: 'bm', colors: { blue: '#4ea8de', purple: '#b48ead', 'warn-text': '#e0a030', 'ok-text': '#5cb85c', 'bad-text': '#d9534f' } }); } catch (err) { console.warn('[Bulk Manager] theme palette', err); }
     settings();
     injectButtons();
     renderSettings();
