@@ -11,7 +11,7 @@ import { power_user } from '../../../power-user.js';
 import { getUserAvatars, getUserAvatar, user_avatar } from '../../../personas.js';
 import {
     escapeHtml, fileStamp, safeFileName, uniqueNamer, avatarStem,
-    newPersonaId, cloneDescriptor, matchesQuery, makeZip, planCharDelete, chatKey,
+    newPersonaId, cloneDescriptor, matchesQuery, makeZip, planCharDelete, chatKey, limiter,
     apiTab, resolveSelection, selectionNote,
 } from './lib.js';
 import * as lore from './lorebooks.js';
@@ -20,7 +20,7 @@ import { installThemePalette } from './theme-palette.js';
 
 const MODULE = 'bulk_manager';
 const LOG = '[BulkManager]';
-const VERSION = '2.2.2'; // keep in sync with manifest.json
+const VERSION = '2.2.3'; // keep in sync with manifest.json
 const BASE_URL = new URL('.', import.meta.url);
 
 // Extensions > Bulk Manager > Diagnose (and /bulk-debug): opens the manager, measures it, reports.
@@ -112,6 +112,23 @@ const unit = () => ({ chars: 'ตัว', personas: 'persona', books: 'เล่
 
 /** @typedef {{file: string, id: string, items: number, size: string, last: number|string, mes: string}} ChatInfo */
 
+// The server reads every chat file of a bot to list them. One scan per selected bot all at
+// once (deleting 100+ bots) spiked the server's memory enough to kill ST on a small VPS.
+const chatScan = limiter(3);
+let chatRenderPending = false;
+
+/** Rerender after chat lists arrive, at most once per frame (the delete confirm redraws every bot's list). */
+function renderAfterChats() {
+    if (chatRenderPending) return;
+    chatRenderPending = true;
+    requestAnimationFrame(() => {
+        chatRenderPending = false;
+        if (ui.busy || !document.getElementById('bm_modal')) return;
+        if (ui.tab === 'chars') renderBody();
+        renderFoot();
+    });
+}
+
 /** Read a character's chat list (file, message count, size, last message). Rerenders when done. */
 async function loadChats(avatar) {
     const known = ui.chatInfo.get(avatar);
@@ -119,7 +136,10 @@ async function loadChats(avatar) {
     ui.chatInfo.set(avatar, { state: 'loading', chats: [] });
     let entry;
     try {
-        const res = await postJson('/api/characters/chats', { avatar_url: avatar });
+        const res = await chatScan(() => (ui.chatInfo.get(avatar)?.state === 'loading'
+            ? postJson('/api/characters/chats', { avatar_url: avatar })
+            : null));
+        if (!res) return; // dropped while waiting in the queue
         const list = res.ok ? await res.json() : null;
         if (!res.ok) throw new Error(String(res.status));
         // { error: true } = no chat folder yet, i.e. no chats
@@ -139,10 +159,7 @@ async function loadChats(avatar) {
     // Dropped meanwhile (cache cleared): don't resurrect a stale result.
     if (ui.chatInfo.get(avatar)?.state !== 'loading') return;
     ui.chatInfo.set(avatar, entry);
-    if (!ui.busy && document.getElementById('bm_modal')) {
-        if (ui.tab === 'chars') renderBody();
-        renderFoot();
-    }
+    renderAfterChats();
 }
 
 function toTime(v) {
@@ -724,8 +741,29 @@ function report(verb, done, failed, unitName) {
  * Download cards (raw .png, re-importable) and optionally their chats as one .zip. Throws if anything can't be read.
  * @param {boolean | ((avatar: string, file: string) => boolean)} withChats true = every chat, or a filter
  */
+// A backup is built in the browser's memory. Past this size it goes out as several .zip
+// parts, so a big delete doesn't take the tab (often a phone) down with it.
+const BACKUP_PART_BYTES = 200 * 1024 * 1024;
+const BACKUP_PART_FILES = 60_000; // the zip format used here counts entries in 16 bits
+
 async function backupChars(avatars, withChats) {
-    const files = [];
+    const stamp = fileStamp();
+    let files = [];
+    let bytes = 0;
+    let part = 0;
+    const flush = last => {
+        if (!files.length) return;
+        part++;
+        const suffix = last && part === 1 ? '' : ` (part ${part})`;
+        downloadBlob(makeZip(files), `characters-backup ${stamp}${suffix}.zip`);
+        files = [];
+        bytes = 0;
+    };
+    const add = (name, data) => {
+        if (files.length && (bytes + data.length > BACKUP_PART_BYTES || files.length >= BACKUP_PART_FILES)) flush(false);
+        files.push({ name, data });
+        bytes += data.length;
+    };
     const cardName = uniqueNamer();
     for (const [i, avatar] of avatars.entries()) {
         setProgress(`กำลังอ่านการ์ด ${i + 1}/${avatars.length}…`);
@@ -733,7 +771,7 @@ async function backupChars(avatars, withChats) {
         try { data = await fetchBytes(characterUrl(avatar)); } catch (e) {
             throw new Error(`อ่านการ์ด "${avatar}" ไม่ได้ (${e.message}) เลยยังไม่ทำอะไร`);
         }
-        files.push({ name: `characters/${cardName(safeFileName(avatar, 'card.png'))}`, data });
+        add(`characters/${cardName(safeFileName(avatar, 'card.png'))}`, data);
 
         if (!withChats) continue;
         const res = await postJson('/api/characters/chats', { avatar_url: avatar, simple: true });
@@ -746,10 +784,11 @@ async function backupChars(avatars, withChats) {
             const r = await postJson('/api/chats/export', { file, avatar_url: avatar, format: 'jsonl', exportfilename: file, is_group: false });
             const json = r.ok ? await r.json().catch(() => null) : null;
             if (typeof json?.result !== 'string') throw new Error(`อ่านแชท "${file}" ของ ${avatar} ไม่ได้ เลยยังไม่ทำอะไร`);
-            files.push({ name: `${folder}/${safeFileName(file, 'chat.jsonl')}`, data: new TextEncoder().encode(json.result) });
+            add(`${folder}/${safeFileName(file, 'chat.jsonl')}`, new TextEncoder().encode(json.result));
         }
     }
-    downloadBlob(makeZip(files), `characters-backup ${fileStamp()}.zip`);
+    flush(true);
+    if (part > 1) toast.info(`ไฟล์สำรองใหญ่ เลยแบ่งเป็น ${part} ไฟล์ (part 1–${part}) ถ้าเบราว์เซอร์ถามว่าให้ดาวน์โหลดหลายไฟล์ไหม ให้กดอนุญาต`);
 }
 
 async function doDeleteChars(avatars, withBackup) {

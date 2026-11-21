@@ -175,3 +175,19 @@ test('selectionNote mentions missing ids only when there are some', () => {
     assert.equal(selectionNote({ found: ['a', 'b'], missing: [] }), 'เลือกไว้ 2 รายการ');
     assert.equal(selectionNote({ found: [], missing: ['x'] }), 'เลือกไว้ 0 รายการ · ไม่พบ 1 รายการ');
 });
+
+test('limiter never runs more than max jobs at once and keeps results in order', async () => {
+    const { limiter } = await import('../lib.js');
+    const run = limiter(3);
+    let active = 0, peak = 0;
+    const job = (v) => async () => {
+        active++; peak = Math.max(peak, active);
+        await new Promise(r => setTimeout(r, 5));
+        active--;
+        if (v === 4) throw new Error('boom');
+        return v;
+    };
+    const out = await Promise.allSettled(Array.from({ length: 10 }, (_, i) => run(job(i))));
+    assert.equal(peak, 3);
+    assert.deepEqual(out.map(o => o.status === 'fulfilled' ? o.value : 'err'), [0, 1, 2, 3, 'err', 5, 6, 7, 8, 9]);
+});

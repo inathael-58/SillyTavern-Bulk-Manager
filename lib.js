@@ -253,6 +253,22 @@ const CRC_TABLE = (() => {
     return t;
 })();
 
+/**
+ * Run at most `max` async jobs at once; the rest wait in order. Returns `run(fn) => Promise`.
+ * Used so a big selection doesn't fire one server-side chat scan per bot all at the same time.
+ */
+export function limiter(max) {
+    let active = 0;
+    const queue = [];
+    const next = () => {
+        if (active >= max || !queue.length) return;
+        active++;
+        const { fn, resolve, reject } = queue.shift();
+        Promise.resolve().then(fn).then(resolve, reject).finally(() => { active--; next(); });
+    };
+    return fn => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+}
+
 export function crc32(buf) {
     let c = 0xFFFFFFFF;
     for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
